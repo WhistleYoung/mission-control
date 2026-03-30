@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-primary: #080808;
+  --bg-secondary: #0D0D0D;
+  --bg-tertiary: #1A1A1A;
+  --bg-hover: #262626;
+  --border: #333333;
+  --border-light: #404040;
+  --text-primary: #FFFFFF;
+  --text-secondary: #A3A3A3;
+  --text-tertiary: #737373;
+  --accent-blue: #5E6AD2;
+  --accent-blue-hover: #4F52B8;
+  --accent-purple: #8E4EC6;
+  --accent-green: #2E7D32;
+  --accent-orange: #E65100;
+  --accent-red: #DC2626;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  height: 100%;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-light);
+}
+
+/* Linear-style input */
+.linear-input {
+  @apply bg-gray-850 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-gray-500 transition-colors;
+}
+
+/* Linear-style button */
+.linear-btn {
+  @apply px-3 py-1.5 text-sm font-medium rounded-md transition-colors cursor-pointer;
+}
+
+.linear-btn-primary {
+  @apply linear-btn bg-white text-gray-900 hover:bg-gray-100;
+}
+
+.linear-btn-secondary {
+  @apply linear-btn bg-gray-800 text-white hover:bg-gray-750 border border-gray-700;
+}
+
+.linear-btn-ghost {
+  @apply linear-btn bg-transparent text-gray-300 hover:bg-gray-800;
+}
