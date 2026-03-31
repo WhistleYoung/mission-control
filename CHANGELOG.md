@@ -2,6 +2,16 @@
 
 ## v1.0.4 (2026-03-31)
 
+### 🙏 致谢
+本项目内嵌了 [Star-Office-UI](https://github.com/ringhyacinth/Star-Office-UI) 项目，采用像素风格可视化 AI 助手工作状态。
+- 项目作者: [Ring Hyacinth](https://x.com/ring_hyacinth) 与 [Simon Lee](https://x.com/simonxxoo)
+- 代码许可证: MIT License
+- 美术资产: 仅供非商业学习使用
+
+感谢 Star-Office-UI 项目的开源贡献！
+
+### 🐛 问题修复
+
 ### 🐛 问题修复
 - 修复实时会话项目分类保存问题
 - 修复实时会话刷新功能
