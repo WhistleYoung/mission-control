@@ -118,8 +118,8 @@ export default function LoginPage() {
       <div className="relative hidden lg:flex flex-col justify-between bg-gradient-to-br from-gray-400 via-gray-500 to-gray-600 dark:from-white/90 dark:via-white/80 dark:to-white/70 p-12 text-white dark:text-gray-900">
         <div className="relative z-20">
           <Link href="/" className="flex items-center gap-2 text-lg font-semibold">
-            <div className="w-8 h-8 rounded-lg bg-white/10 backdrop-blur-sm flex items-center justify-center font-bold text-sm">
-              MC
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">
+              🦞
             </div>
             <span>Mission Control</span>
           </Link>
@@ -148,8 +148,8 @@ export default function LoginPage() {
         <div className="w-full max-w-[420px]">
           {/* Mobile Logo */}
           <div className="lg:hidden flex items-center justify-center gap-2 text-lg font-semibold mb-12">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center font-bold text-sm text-white">
-              MC
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-xl text-white">
+              🦞
             </div>
             <span className="text-white">Mission Control</span>
           </div>

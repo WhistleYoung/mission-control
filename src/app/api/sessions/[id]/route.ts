@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
+import { pool } from '@/lib/db'
 import type { NextRequest } from 'next/server'
 
 // Extract user text from metadata blocks
@@ -94,10 +95,25 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       })
       .filter(Boolean)
     
+    // Get custom tags from conversations table
+    let customTags: string[] = []
+    try {
+      const [rows]: any = await pool.query(
+        'SELECT custom_tags FROM conversations WHERE session_id = ? LIMIT 1',
+        [id]
+      )
+      if (rows.length > 0 && rows[0].custom_tags) {
+        try {
+          customTags = JSON.parse(rows[0].custom_tags)
+        } catch {}
+      }
+    } catch {}
+
     return NextResponse.json({
       sessionId: id,
       agentId: foundAgentId,
       messages,
+      customTags,
     })
   } catch (error) {
     console.error('Failed to fetch session messages:', error)

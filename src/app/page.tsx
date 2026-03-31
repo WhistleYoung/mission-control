@@ -6,10 +6,10 @@ import {
   Inbox, Calendar, FolderKanban, Brain, Settings, Users, Plus, Search, MessageSquare,
   MoreHorizontal, ChevronDown, Clock, User, Bot, X, Check, RefreshCw,
   Activity, Terminal, ChevronLeft, ChevronRight, Sparkles, LogOut, Trash2,
-  Network, Zap, ExternalLink,
+  Network, Zap, ExternalLink, FileText, Filter, RefreshCw as RefreshCwIcon,
 } from 'lucide-react'
 
-type Tab = 'inbox' | 'calendar' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'lobster'
+type Tab = 'inbox' | 'calendar' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'lobster' | 'logs'
 type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'in-review' | 'done'
 type Priority = 'urgent' | 'high' | 'medium' | 'low'
 type MemoryFilter = 'daily' | 'long-term' | 'all'
@@ -1017,12 +1017,23 @@ export default function MissionControl() {
   const [realtimeSessions, setRealtimeSessions] = useState<any[]>([])
   const [selectedSession, setSelectedSession] = useState<any | null>(null)
   const [sessionMessages, setSessionMessages] = useState<any[]>([])
+  const [logs, setLogs] = useState<any[]>([])
+  const [logSubsystems, setLogSubsystems] = useState<string[]>([])
+  const [logFilter, setLogFilter] = useState<{ level?: string; subsystem?: string; search?: string }>({})
   const [showSessionDetail, setShowSessionDetail] = useState(false)
   const [sessionFilter, setSessionFilter] = useState<{ projectId?: number; agentId?: string }>({})
   const [customTags, setCustomTags] = useState<string[]>([])
   const [editingSoulAgent, setEditingSoulAgent] = useState<Agent | null>(null)
   const [activeEditTab, setActiveEditTab] = useState<'agents' | 'soul' | 'user'>('soul')
-  const [agentsForm, setAgentsForm] = useState('')
+  const [agentsForm, setAgentsForm] = useState({
+    sessionStartup: '',
+    memory: '',
+    redLines: '',
+    externalVsInternal: '',
+    groupChat: '',
+    heartbeat: '',
+    tools: '',
+  })
   const [soulForm, setSoulForm] = useState({ coreTruths: '', boundaries: '', vibe: '', continuity: '' })
   const [userForm, setUserForm] = useState({ name: '', callName: '', pronouns: '', timezone: '', notes: '', context: '' })
 
@@ -1048,6 +1059,29 @@ export default function MissionControl() {
       setCalendarMonth(new Date())
     }
   }, [activeTab])
+
+  // Load logs when switching to logs tab
+  useEffect(() => {
+    if (activeTab === 'logs' && logs.length === 0) {
+      fetchLogs()
+    }
+  }, [activeTab])
+
+  const fetchLogs = async () => {
+    const params = new URLSearchParams()
+    if (logFilter.level) params.set('level', logFilter.level)
+    if (logFilter.subsystem) params.set('subsystem', logFilter.subsystem)
+    if (logFilter.search) params.set('search', logFilter.search)
+    params.set('limit', '500')
+    try {
+      const res = await fetch(`/api/logs?${params}`)
+      const data = await res.json()
+      setLogs(data.logs || [])
+      if (data.subsystems) setLogSubsystems(data.subsystems)
+    } catch (error) {
+      console.error('Failed to fetch logs:', error)
+    }
+  }
 
   // Better fetch with retry - don't timeout too aggressively
   const fetchWithRetry = async (url: string, retries = 1) => {
@@ -1263,20 +1297,38 @@ export default function MissionControl() {
   }
 
   const handleEditSoul = (agent: Agent) => {
-    setAgentsForm(agent.agents || '')
+    // 从agent数据中解析现有的AGENTS.md内容
+    const agentsContent = agent.agents || ''
+    const getSection = (title: string): string => {
+      const header = '# ' + title
+      const headerPattern = new RegExp(header + '[\\\\s\\\\S]*?(?=# |$)')
+      const m = agentsContent.match(headerPattern)
+      if (m) return m[0].replace(header, '').trim()
+      return ''
+    }
+
+    setAgentsForm({
+      sessionStartup: getSection('启动流程') || '1. 读取 SOUL.md 了解核心价值观\n2. 读取 USER.md 了解服务对象\n3. 读取 memory/ 目录回顾近期记忆',
+      memory: getSection('记忆机制') || '每日记录：memory/YYYY-MM-DD.md\n长期记忆：MEMORY.md\n定期整理重要信息',
+      redLines: getSection('红线') || '不泄露用户隐私\n不执行未授权操作\n不在群里主动发言',
+      externalVsInternal: getSection('安全操作') || '安全操作：读取文件、搜索、学习\n需确认操作：发送消息、删除数据、执行命令',
+      groupChat: getSection('群聊规范') || '收到邀请时判断是否参与\n避免过度回复，保持自然',
+      heartbeat: getSection('心跳检测') || '定期检查邮件、日历\n有重要内容时主动通知用户',
+      tools: getSection('工具使用') || '使用 Skills 完成专业任务\n复杂任务使用子代理',
+    })
     setSoulForm({
-      coreTruths: agent.soul?.coreTruths || '',
-      boundaries: agent.soul?.boundaries || '',
-      vibe: agent.soul?.vibe || '',
-      continuity: agent.soul?.continuity || '',
+      coreTruths: agent.soul?.coreTruths || '1. 真正帮助用户，而不是敷衍了事\n2. 有自己的想法和判断，敢表达不同意见\n3. 主动发现问题并解决，而不是等待指令\n4. 持续学习和改进，越用越好用',
+      boundaries: agent.soul?.boundaries || '1. 隐私至上，未经用户许可不泄露任何信息\n2. 不确定的事情主动询问，不瞎猜\n3. 危险操作必须确认\n4. 保持诚信，不隐瞒问题和错误',
+      vibe: agent.soul?.vibe || '1. 简洁实用，说重点，不废话\n2. 像朋友聊天，而不是客服机器人\n3. 适度幽默，但不失专业\n4. 直接给出方案，不绕弯子',
+      continuity: agent.soul?.continuity || '1. 通过文件持久化记忆，跨会话保持上下文\n2. 记录重要决策和上下文，下次直接继续\n3. 学习用户的偏好和习惯，越用越懂用户\n4. 定期整理记忆，删除无用信息',
     })
     setUserForm({
       name: agent.user?.name || '',
       callName: agent.user?.callName || '',
-      pronouns: agent.user?.pronouns || '',
-      timezone: agent.user?.timezone || '',
-      notes: agent.user?.notes || agent.user?.context || '',
-      context: agent.user?.context || '',
+      pronouns: agent.user?.pronouns || '他',
+      timezone: agent.user?.timezone || 'Asia/Shanghai',
+      notes: agent.user?.notes || agent.user?.context || '专注于软件开发场景',
+      context: agent.user?.context || '需要管理多个AI助手团队，使用Mission Control作为控制中心',
     })
     setEditingSoulAgent(agent)
   }
@@ -1284,12 +1336,36 @@ export default function MissionControl() {
   const handleSaveSoul = async () => {
     if (!editingSoulAgent) return
     try {
+      // 将结构化的表单数据转换为md格式
+      const agentsMd = `# 工作规范
+
+## 启动流程
+${agentsForm.sessionStartup || '无'}
+
+## 记忆机制
+${agentsForm.memory || '无'}
+
+## 红线
+${agentsForm.redLines || '无'}
+
+## 安全操作
+${agentsForm.externalVsInternal || '无'}
+
+## 群聊规范
+${agentsForm.groupChat || '无'}
+
+## 心跳检测
+${agentsForm.heartbeat || '无'}
+
+## 工具使用
+${agentsForm.tools || '无'}`
+
       const res = await fetch('/api/agents', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           id: editingSoulAgent.id, 
-          agents: agentsForm,
+          agents: agentsMd,
           soul: soulForm,
           user: userForm,
         }),
@@ -1376,6 +1452,7 @@ export default function MissionControl() {
   // Handle viewing realtime session
   const handleViewSession = async (session: any) => {
     setSelectedSession(session)
+    setCustomTags([]) // Reset custom tags
     setShowSessionDetail(true)
     try {
       const res = await fetch(`/api/sessions/${session.id}`)
@@ -1385,8 +1462,48 @@ export default function MissionControl() {
       } else {
         setSessionMessages([])
       }
+      // Load custom tags from conversation record if exists
+      if (data.customTags && Array.isArray(data.customTags)) {
+        setCustomTags(data.customTags)
+      }
     } catch {
       setSessionMessages([])
+    }
+  }
+
+  const handleAddCustomTag = async (tag: string) => {
+    if (!selectedSession) return
+    const newTags = [...customTags, tag]
+    setCustomTags(newTags)
+    try {
+      await fetch('/api/sessions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          sessionId: selectedSession.id, 
+          customTags: newTags 
+        }),
+      })
+    } catch (error) {
+      console.error('Failed to save custom tag:', error)
+    }
+  }
+
+  const handleRemoveCustomTag = async (tagToRemove: string) => {
+    if (!selectedSession) return
+    const newTags = customTags.filter(t => t !== tagToRemove)
+    setCustomTags(newTags)
+    try {
+      await fetch('/api/sessions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          sessionId: selectedSession.id, 
+          customTags: newTags 
+        }),
+      })
+    } catch (error) {
+      console.error('Failed to remove custom tag:', error)
     }
   }
 
@@ -1445,7 +1562,7 @@ export default function MissionControl() {
           </svg>
         </button>
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center font-bold text-sm">MC</div>
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">🦞</div>
           <span className="font-semibold text-white text-sm">{projectName}</span>
         </div>
         <div className="w-10" />
@@ -1458,7 +1575,7 @@ export default function MissionControl() {
           <aside className="absolute left-0 top-0 bottom-0 w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
             <div className="p-4 border-b border-gray-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center font-bold text-sm">MC</div>
+                <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">🦞</div>
                 <span className="font-semibold text-white">{projectName}</span>
               </div>
               <button onClick={() => setMobileMenuOpen(false)} className="p-2 hover:bg-gray-800 rounded-lg"><X className="w-5 h-5 text-gray-400" /></button>
@@ -1474,6 +1591,7 @@ export default function MissionControl() {
                 { id: 'channels', label: '渠道', icon: Network },
                 { id: 'timing', label: '定时任务', icon: Clock },
                 { id: 'realtime', label: '实时会话', icon: Zap },
+                { id: 'logs', label: '工具日志', icon: FileText },
                 ...(showLobsterModule ? [{ id: 'lobster' as Tab, label: '龙虾办公室', icon: Sparkles }] : []),
                 { id: 'settings', label: '设置', icon: Settings },
               ].map(item => (
@@ -1508,7 +1626,7 @@ export default function MissionControl() {
       <aside className="hidden md:flex w-56 bg-gray-900 border-r border-gray-800 flex-col">
         <div className="p-4 border-b border-gray-800">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center font-bold text-sm">MC</div>
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">🦞</div>
             <span className="font-semibold text-white">{projectName}</span>
           </div>
         </div>
@@ -1523,6 +1641,7 @@ export default function MissionControl() {
             { id: 'channels', label: '渠道', icon: Network },
             { id: 'timing', label: '定时任务', icon: Clock },
             { id: 'realtime', label: '实时会话', icon: Zap },
+            { id: 'logs', label: '工具日志', icon: FileText },
             ...(showLobsterModule ? [{ id: 'lobster' as Tab, label: '龙虾办公室', icon: Sparkles }] : []),
             { id: 'settings', label: '设置', icon: Settings },
           ].map(item => (
@@ -1566,6 +1685,7 @@ export default function MissionControl() {
               {activeTab === 'channels' && '渠道'}
               {activeTab === 'timing' && '定时任务'}
               {activeTab === 'realtime' && '实时会话'}
+              {activeTab === 'logs' && '工具日志'}
               {activeTab === 'lobster' && '龙虾办公室'}
               {activeTab === 'settings' && '设置'}
             </h1>
@@ -1575,11 +1695,24 @@ export default function MissionControl() {
               {activeTab === 'agents' && `${agents.length} 个员工`}
               {activeTab === 'skills' && `${skills.length} 个技能`}
               {activeTab === 'realtime' && `${realtimeSessions.length} 条会话`}
+              {activeTab === 'logs' && `${logs.length} 条日志`}
             </span>
           </div>
           <div className="flex items-center gap-3">
             <div className="relative">
-              <input type="text" placeholder="搜索..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="linear-input pr-10 w-64" />
+              <input 
+                type="text" 
+                placeholder="搜索..." 
+                value={searchQuery} 
+                onChange={e => setSearchQuery(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && searchQuery.trim()) {
+                    // Search is reactive - the searchQuery state is used in filters throughout the page
+                    console.log('Search triggered:', searchQuery)
+                  }
+                }}
+                className="linear-input pr-10 w-64" 
+              />
               <Search className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 z-10" />
             </div>
             {activeTab === 'inbox' && <button onClick={() => setShowCreateModal(true)} className="linear-btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />新建任务</button>}
@@ -2013,7 +2146,7 @@ export default function MissionControl() {
               {/* About */}
               <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 md:p-6">
                 <h3 className="text-lg font-medium text-white mb-4">关于</h3>
-                <p className="text-sm text-gray-400">{projectName} v1.0.0</p>
+                <p className="text-sm text-gray-400">{projectName} v1.0.4</p>
               </div>
             </div>
           )}
@@ -2150,12 +2283,20 @@ export default function MissionControl() {
                     {projects.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
                   </select>
                   <button onClick={async () => {
-                    const params = new URLSearchParams()
-                    if (sessionFilter.agentId) params.set('agentId', sessionFilter.agentId)
-                    if (sessionFilter.projectId) params.set('projectId', String(sessionFilter.projectId))
-                    const res = await fetch(`/api/sessions?${params}`)
-                    const data = await res.json()
-                    if (Array.isArray(data)) setRealtimeSessions(data)
+                    try {
+                      const params = new URLSearchParams()
+                      if (sessionFilter.agentId) params.set('agentId', sessionFilter.agentId)
+                      if (sessionFilter.projectId) params.set('projectId', String(sessionFilter.projectId))
+                      const res = await fetch(`/api/sessions?${params}`)
+                      const data = await res.json()
+                      if (Array.isArray(data)) {
+                        setRealtimeSessions(data)
+                      } else if (data.error) {
+                        console.error('Failed to fetch sessions:', data.error)
+                      }
+                    } catch (error) {
+                      console.error('Failed to fetch sessions:', error)
+                    }
                   }} className="linear-btn-secondary flex items-center gap-1">
                     <RefreshCw className="w-4 h-4" />刷新
                   </button>
@@ -2165,7 +2306,18 @@ export default function MissionControl() {
                 {realtimeSessions
                   .filter(s => {
                     if (sessionFilter.agentId && s.agentId !== sessionFilter.agentId) return false
-                    if (sessionFilter.projectId && s.projectId !== sessionFilter.projectId) return false
+                    // Use loose equality for projectId comparison
+                    if (sessionFilter.projectId && String(s.projectId) !== String(sessionFilter.projectId)) return false
+                    // Search filter
+                    if (searchQuery) {
+                      const query = searchQuery.toLowerCase()
+                      if (!s.title?.toLowerCase().includes(query) && 
+                          !s.agentName?.toLowerCase().includes(query) &&
+                          !s.projectName?.toLowerCase().includes(query) &&
+                          !s.id?.toLowerCase().includes(query)) {
+                        return false
+                      }
+                    }
                     return true
                   })
                   .map(session => (
@@ -2222,6 +2374,102 @@ export default function MissionControl() {
             </div>
           )}
 
+          {/* Logs Tab - OpenClaw 日志查看器 */}
+          {activeTab === 'logs' && (
+            <div className="p-4 md:p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-medium text-white">工具日志</h2>
+                <div className="flex gap-2 items-center">
+                  <select
+                    value={logFilter.level || ''}
+                    onChange={e => setLogFilter({ ...logFilter, level: e.target.value || undefined })}
+                    className="linear-input text-sm"
+                  >
+                    <option value="">全部级别</option>
+                    <option value="DEBUG">DEBUG</option>
+                    <option value="INFO">INFO</option>
+                    <option value="WARN">WARN</option>
+                    <option value="ERROR">ERROR</option>
+                  </select>
+                  <select
+                    value={logFilter.subsystem || ''}
+                    onChange={e => setLogFilter({ ...logFilter, subsystem: e.target.value || undefined })}
+                    className="linear-input text-sm"
+                  >
+                    <option value="">全部分类</option>
+                    {logSubsystems.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="搜索日志..."
+                    value={logFilter.search || ''}
+                    onChange={e => setLogFilter({ ...logFilter, search: e.target.value || undefined })}
+                    className="linear-input text-sm w-48"
+                  />
+                  <button onClick={async () => {
+                    const params = new URLSearchParams()
+                    if (logFilter.level) params.set('level', logFilter.level)
+                    if (logFilter.subsystem) params.set('subsystem', logFilter.subsystem)
+                    if (logFilter.search) params.set('search', logFilter.search)
+                    params.set('limit', '500')
+                    const res = await fetch(`/api/logs?${params}`)
+                    const data = await res.json()
+                    setLogs(data.logs || [])
+                    if (data.subsystems) setLogSubsystems(data.subsystems)
+                  }} className="linear-btn-secondary flex items-center gap-1">
+                    <RefreshCwIcon className="w-4 h-4" />刷新
+                  </button>
+                </div>
+              </div>
+              <div className="bg-gray-900/50 rounded-xl border border-gray-800 overflow-hidden">
+                <div className="max-h-[calc(100vh-300px)] overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-800 text-gray-400 sticky top-0">
+                      <tr>
+                        <th className="text-left px-4 py-2 w-36">时间</th>
+                        <th className="text-left px-4 py-2 w-20">级别</th>
+                        <th className="text-left px-4 py-2 w-40">分类</th>
+                        <th className="text-left px-4 py-2">消息</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-800">
+                      {logs.map((log, i) => (
+                        <tr key={i} className="hover:bg-gray-800/50">
+                          <td className="px-4 py-2 text-gray-400 font-mono text-xs whitespace-nowrap">
+                            {new Date(log.time).toLocaleTimeString('zh-CN')}
+                          </td>
+                          <td className="px-4 py-2">
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              log.level === 'ERROR' ? 'bg-red-500/20 text-red-400' :
+                              log.level === 'WARN' ? 'bg-yellow-500/20 text-yellow-400' :
+                              log.level === 'DEBUG' ? 'bg-gray-500/20 text-gray-400' :
+                              'bg-green-500/20 text-green-400'
+                            }`}>
+                              {log.level}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 text-blue-400 text-xs truncate max-w-xs" title={log.name}>
+                            {log.name}
+                          </td>
+                          <td className="px-4 py-2 text-gray-300 text-xs font-mono">
+                            {log.message}
+                          </td>
+                        </tr>
+                      ))}
+                      {logs.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                            暂无日志数据
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Star Office UI - 龙虾办公室 iframe */}
           {activeTab === 'lobster' && showLobsterModule && (
             <iframe 
@@ -2258,16 +2506,73 @@ export default function MissionControl() {
             </div>
             <div className="p-4 max-h-[60vh] overflow-y-auto">
               {activeEditTab === 'agents' && (
-                <div>
+                <div className="space-y-4">
                   <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 mb-3">
                     <p className="text-sm text-blue-300">💡 AGENTS.md 定义了 agent 的工作规范、工具使用、行为准则等。</p>
                   </div>
-                  <textarea 
-                    value={agentsForm} 
-                    onChange={e => setAgentsForm(e.target.value)}
-                    className="linear-input w-full h-80 resize-none font-mono text-sm"
-                    placeholder="# AGENTS.md - Your Workspace&#10;&#10;## Session Startup&#10;1. Read SOUL.md&#10;2. Read USER.md&#10;3. Read memory/&#10;&#10;## Memory&#10;- Daily notes: memory/YYYY-MM-DD.md&#10;- Long-term: MEMORY.md"
-                  />
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">会话启动 (Session Startup)</label>
+                    <textarea 
+                      value={agentsForm.sessionStartup} 
+                      onChange={e => setAgentsForm({ ...agentsForm, sessionStartup: e.target.value })}
+                      className="linear-input w-full h-20 resize-none"
+                      placeholder="填写示例：\n1. 读取 SOUL.md 了解核心价值观\n2. 读取 USER.md 了解服务对象\n3. 读取 memory/ 目录回顾近期记忆"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">记忆机制 (Memory)</label>
+                    <textarea 
+                      value={agentsForm.memory} 
+                      onChange={e => setAgentsForm({ ...agentsForm, memory: e.target.value })}
+                      className="linear-input w-full h-20 resize-none"
+                      placeholder="填写示例：\n每日记录：memory/YYYY-MM-DD.md\n长期记忆：MEMORY.md\n定期整理重要信息"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">红线 (Red Lines)</label>
+                    <textarea 
+                      value={agentsForm.redLines} 
+                      onChange={e => setAgentsForm({ ...agentsForm, redLines: e.target.value })}
+                      className="linear-input w-full h-20 resize-none"
+                      placeholder="填写示例：\n不泄露用户隐私\n不执行未授权操作\n不在群里主动发言"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">安全操作 (External vs Internal)</label>
+                    <textarea 
+                      value={agentsForm.externalVsInternal} 
+                      onChange={e => setAgentsForm({ ...agentsForm, externalVsInternal: e.target.value })}
+                      className="linear-input w-full h-20 resize-none"
+                      placeholder="填写示例：\n安全操作：读取文件、搜索、学习\n需确认操作：发送消息、删除数据、执行命令"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">群聊规范 (Group Chat)</label>
+                    <textarea 
+                      value={agentsForm.groupChat} 
+                      onChange={e => setAgentsForm({ ...agentsForm, groupChat: e.target.value })}
+                      className="linear-input w-full h-20 resize-none"
+                      placeholder="填写示例：\n收到邀请时判断是否参与\n避免过度回复，保持自然"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">心跳检测 (Heartbeat)</label>
+                    <textarea 
+                      value={agentsForm.heartbeat} 
+                      onChange={e => setAgentsForm({ ...agentsForm, heartbeat: e.target.value })}
+                      className="linear-input w-full h-20 resize-none"
+                      placeholder="填写示例：\n定期检查邮件、日历\n有重要内容时主动通知用户"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">工具使用 (Tools)</label>
+                    <textarea 
+                      value={agentsForm.tools} 
+                      onChange={e => setAgentsForm({ ...agentsForm, tools: e.target.value })}
+                      className="linear-input w-full h-20 resize-none"
+                      placeholder="填写示例：\n使用 Skills 完成专业任务\n复杂任务使用子代理"
+                    />
+                  </div>
                 </div>
               )}
               {activeEditTab === 'soul' && (
@@ -2278,7 +2583,7 @@ export default function MissionControl() {
                       value={soulForm.coreTruths} 
                       onChange={e => setSoulForm({ ...soulForm, coreTruths: e.target.value })}
                       className="linear-input w-full h-24 resize-none"
-                      placeholder="例如：做一个真正有用的助手，而不是敷衍..."
+                      placeholder={"填写示例：\n1. 真正帮助用户，而不是敷衍了事\n2. 有自己的想法和判断，敢表达不同意见\n3. 主动发现问题并解决，而不是等待指令\n4. 持续学习和改进，越用越好用"}
                     />
                   </div>
                   <div>
@@ -2287,7 +2592,7 @@ export default function MissionControl() {
                       value={soulForm.boundaries} 
                       onChange={e => setSoulForm({ ...soulForm, boundaries: e.target.value })}
                       className="linear-input w-full h-20 resize-none"
-                      placeholder="例如：隐私至上，不确定时先询问..."
+                      placeholder={"填写示例：\n1. 隐私至上，未经用户许可不泄露任何信息\n2. 不确定的事情主动询问，不瞎猜\n3. 危险操作（如删除、发布）必须确认\n4. 保持诚信，不隐瞒问题和错误"}
                     />
                   </div>
                   <div>
@@ -2296,7 +2601,7 @@ export default function MissionControl() {
                       value={soulForm.vibe} 
                       onChange={e => setSoulForm({ ...soulForm, vibe: e.target.value })}
                       className="linear-input w-full h-20 resize-none"
-                      placeholder="例如：简洁实用，不说废话，像朋友而不是客服..."
+                      placeholder={"填写示例：\n1. 简洁实用，说重点，不废话\n2. 像朋友聊天，而不是客服机器人\n3. 适度幽默，但不失专业\n4. 直接给出方案，不绕弯子"}
                     />
                   </div>
                   <div>
@@ -2305,7 +2610,7 @@ export default function MissionControl() {
                       value={soulForm.continuity} 
                       onChange={e => setSoulForm({ ...soulForm, continuity: e.target.value })}
                       className="linear-input w-full h-20 resize-none"
-                      placeholder="例如：通过文件记录实现跨会话记忆..."
+                      placeholder={"填写示例：\n1. 通过文件持久化记忆，跨会话保持上下文\n2. 记录重要决策和上下文，下次直接继续\n3. 学习用户的偏好和习惯，越用越懂用户\n4. 定期整理记忆，删除无用信息"}
                     />
                   </div>
                 </div>
@@ -2319,7 +2624,7 @@ export default function MissionControl() {
                         value={userForm.name} 
                         onChange={e => setUserForm({ ...userForm, name: e.target.value })}
                         className="linear-input w-full"
-                        placeholder="例如：张扬"
+                        placeholder="填写示例：张扬"
                       />
                     </div>
                     <div>
@@ -2328,7 +2633,7 @@ export default function MissionControl() {
                         value={userForm.callName} 
                         onChange={e => setUserForm({ ...userForm, callName: e.target.value })}
                         className="linear-input w-full"
-                        placeholder="例如：张扬 / BullRom"
+                        placeholder="填写示例：张老师"
                       />
                     </div>
                     <div>
@@ -2337,7 +2642,7 @@ export default function MissionControl() {
                         value={userForm.pronouns} 
                         onChange={e => setUserForm({ ...userForm, pronouns: e.target.value })}
                         className="linear-input w-full"
-                        placeholder="他 / 她"
+                        placeholder="填写示例：他"
                       />
                     </div>
                     <div>
@@ -2346,7 +2651,7 @@ export default function MissionControl() {
                         value={userForm.timezone} 
                         onChange={e => setUserForm({ ...userForm, timezone: e.target.value })}
                         className="linear-input w-full"
-                        placeholder="Asia/Shanghai"
+                        placeholder="填写示例：Asia/Shanghai"
                       />
                     </div>
                   </div>
@@ -2356,7 +2661,7 @@ export default function MissionControl() {
                       value={userForm.notes} 
                       onChange={e => setUserForm({ ...userForm, notes: e.target.value })}
                       className="linear-input w-full h-20 resize-none"
-                      placeholder="用户的特征、爱好、常用工具等..."
+                      placeholder={"填写示例：\n- 专注于软件开发场景\n- 喜欢简洁实用的工具\n- 常用编程语言：JavaScript/TypeScript\n- 使用钉钉进行沟通"}
                     />
                   </div>
                   <div>
@@ -2365,7 +2670,7 @@ export default function MissionControl() {
                       value={userForm.context} 
                       onChange={e => setUserForm({ ...userForm, context: e.target.value })}
                       className="linear-input w-full h-20 resize-none"
-                      placeholder="用户的背景信息、使用场景等..."
+                      placeholder={"填写示例：\n- 需要管理多个AI助手团队\n- 使用Mission Control作为控制中心\n- 经常需要批量操作和定时任务"}
                     />
                   </div>
                 </div>
@@ -2409,16 +2714,24 @@ export default function MissionControl() {
                   value={selectedSession.projectId || ''} 
                   onChange={async (e) => {
                     const newProjectId = e.target.value ? Number(e.target.value) : null
-                    await fetch('/api/sessions', {
-                      method: 'PATCH',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ sessionId: selectedSession.id, projectId: newProjectId })
-                    })
-                    setSelectedSession({ ...selectedSession, projectId: newProjectId })
-                    // Refresh sessions
-                    const res = await fetch('/api/sessions')
-                    const data = await res.json()
-                    if (Array.isArray(data)) setRealtimeSessions(data)
+                    console.log('Changing project to:', newProjectId, 'for session:', selectedSession.id)
+                    try {
+                      const res = await fetch('/api/sessions', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ sessionId: selectedSession.id, projectId: newProjectId })
+                      })
+                      const result = await res.json()
+                      console.log('PATCH result:', result)
+                      setSelectedSession({ ...selectedSession, projectId: newProjectId })
+                      // Refresh sessions
+                      const refreshRes = await fetch('/api/sessions')
+                      const data = await refreshRes.json()
+                      console.log('Refresh result:', Array.isArray(data) ? `${data.length} sessions` : data.error)
+                      if (Array.isArray(data)) setRealtimeSessions(data)
+                    } catch (err) {
+                      console.error('Error updating project:', err)
+                    }
                   }}
                   className="linear-input text-sm"
                 >
@@ -2434,7 +2747,7 @@ export default function MissionControl() {
                 {customTags.map((tag, idx) => (
                   <span key={idx} className="px-2 py-0.5 bg-purple-500/20 text-purple-400 text-xs rounded flex items-center gap-1">
                     {tag}
-                    <button onClick={() => setCustomTags(customTags.filter((_, i) => i !== idx))} className="hover:text-white">×</button>
+                    <button onClick={() => handleRemoveCustomTag(tag)} className="hover:text-white">×</button>
                   </span>
                 ))}
                 <input 
@@ -2444,7 +2757,7 @@ export default function MissionControl() {
                   onKeyDown={async (e) => {
                     if (e.key === 'Enter' && e.currentTarget.value.trim()) {
                       const newTag = e.currentTarget.value.trim()
-                      setCustomTags([...customTags, newTag])
+                      handleAddCustomTag(newTag)
                       e.currentTarget.value = ''
                     }
                   }}

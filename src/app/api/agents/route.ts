@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from 'fs'
 import { join } from 'path'
+import { exec } from 'child_process'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import type { NextRequest } from 'next/server'
 
@@ -8,7 +9,25 @@ const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
 const LOCAL_CONFIG = '/home/bullrom/mission-control/data/agent-configs.json'
 const TEMPLATE_WORKSPACE = '/home/bullrom/.openclaw/workspace'
 
-function getAgentIdentityName(agentId: string): string {
+// Restart OpenClaw Gateway to reload config (delayed, non-blocking)
+function restartGateway() {
+  // Delay restart by 2 seconds to ensure API response is sent first
+  setTimeout(() => {
+    const openclawCmd = process.env.OPENCLAW_PATH || '/home/bullrom/.npm-global/bin/openclaw'
+    exec(`${openclawCmd} gateway restart`, (error) => {
+      if (error) {
+        console.error('Failed to restart OpenClaw Gateway:', error)
+        return
+      }
+      console.log('OpenClaw Gateway restart completed')
+    })
+  }, 2000)
+}
+
+function getAgentIdentityName(agentId: string, agentName?: string): string {
+  // If agent has a name in config, use it
+  if (agentName) return agentName
+  // Fallback to hardcoded names for known agents
   const names: Record<string, string> = {
     main: '小七',
     worker: '壹号牛马',
@@ -147,7 +166,7 @@ export async function GET(request: NextRequest) {
     return {
       id: agent.id,
       name: agent.name,
-      identityName: getAgentIdentityName(agent.id),
+      identityName: getAgentIdentityName(agent.id, agent.name),
       identityEmoji: getAgentIdentityEmoji(agent.id),
       model: localModel || agent.model || 'unknown',
       workspace: agent.workspace,
@@ -280,11 +299,10 @@ The more you know, the better you can help. But remember — you're learning abo
         
         const newAgent = {
           id: id,
-          name: id,
+          name: name,
           workspace: workspacePath,
           agentDir: `/home/bullrom/.openclaw/agents/${id}/agent`,
           model: model || 'minimax/MiniMax-M2.7',
-          routes: [id],
         }
         
         openclawConfig.agents.list.push(newAgent)
@@ -293,6 +311,9 @@ The more you know, the better you can help. But remember — you're learning abo
     } catch (e) {
       console.log('Could not update OpenClaw config:', e)
     }
+    
+    // Restart gateway to reload config
+    restartGateway()
     
     return NextResponse.json({ success: true, id, name, model, boundChannel, workspace: workspacePath })
   } catch (error) {
@@ -364,6 +385,9 @@ export async function PUT(request: NextRequest) {
     } catch (e) {
       console.log('Could not update OpenClaw config:', e)
     }
+    
+    // Restart gateway to reload config
+    restartGateway()
     
     return NextResponse.json({ success: true, model, boundChannel })
   } catch (error) {
@@ -528,6 +552,9 @@ export async function DELETE(request: NextRequest) {
         rmSync(agentDir, { recursive: true, force: true })
       }
     } catch (e) {}
+    
+    // Restart gateway to reload config
+    restartGateway()
     
     return NextResponse.json({ success: true })
   } catch (error) {

@@ -256,6 +256,16 @@ export async function GET(request: NextRequest) {
     // Get projects from DB for auto-tagging
     const projects = await getProjects()
     
+    // Get saved project assignments from database
+    const [savedProjects]: any = await pool.query('SELECT session_id, project_id FROM conversations WHERE session_id IS NOT NULL')
+    console.log(`GET sessions: found ${savedProjects.length} saved project assignments`)
+    const savedProjectMap: Record<string, number> = {}
+    for (const row of savedProjects) {
+      if (row.session_id) {
+        savedProjectMap[row.session_id] = row.project_id
+      }
+    }
+    
     // Read all agents
     if (!existsSync(AGENTS_DIR)) {
       return NextResponse.json([])
@@ -299,8 +309,15 @@ export async function GET(request: NextRequest) {
         // Auto-tag with projects and categories
         const tagResult = await autoTagConversation(messages, projects)
         
+        // Use saved project if exists (check for null explicitly), otherwise use auto-tag result
+        const savedProjectId = savedProjectMap[sessionId]
+        const finalProjectId = savedProjectId !== undefined && savedProjectId !== null ? savedProjectId : tagResult.projectId
+        
+        // Find project info
+        const project = projects.find(p => p.id === finalProjectId)
+        
         // Filter by project if requested
-        if (projectId && tagResult.projectId !== parseInt(projectId)) {
+        if (projectId && finalProjectId !== parseInt(projectId)) {
           continue
         }
         
@@ -312,9 +329,9 @@ export async function GET(request: NextRequest) {
           agentName: getAgentName(dir),
           title,
           messageCount: messages.length,
-          projectId: tagResult.projectId,
-          projectName: tagResult.projectName,
-          projectEmoji: tagResult.projectEmoji,
+          projectId: finalProjectId,
+          projectName: project?.name || tagResult.projectName,
+          projectEmoji: project?.emoji || tagResult.projectEmoji,
           autoTags: tagResult.autoTags,
           firstMessage: messages[0]?.timestamp,
           lastMessage: messages[messages.length - 1]?.timestamp,
@@ -331,7 +348,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: '获取会话失败' }, { status: 500 })
   }
 }
-// PATCH - Update session project tag
+// PATCH - Update session project tag and custom tags
 export async function PATCH(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
@@ -344,31 +361,43 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: '缺少会话ID' }, { status: 400 })
     }
     
-    // Store project tag in database (sessions table)
+    // Store project tag and custom tags in database (conversations table)
     // First check if session exists in conversations table
     const [rows]: any = await pool.query(
       'SELECT id FROM conversations WHERE session_id = ? LIMIT 1',
       [sessionId]
     )
     
+    const tagsJson = customTags ? JSON.stringify(customTags) : null
+    
+    // Debug log
+    console.log(`PATCH sessions: sessionId=${sessionId}, projectId=${projectId}, customTags=${customTags}`)
+    
     if (rows.length > 0) {
       // Update existing record
-      await pool.query(
-        'UPDATE conversations SET project_id = ? WHERE session_id = ?',
-        [projectId || null, sessionId]
-      )
+      if (projectId !== undefined) {
+        console.log(`Updating existing record: project_id=${projectId}`)
+        await pool.query(
+          'UPDATE conversations SET project_id = ?, custom_tags = ? WHERE session_id = ?',
+          [projectId, tagsJson, sessionId]
+        )
+      } else if (customTags !== undefined) {
+        await pool.query(
+          'UPDATE conversations SET custom_tags = ? WHERE session_id = ?',
+          [tagsJson, sessionId]
+        )
+      }
     } else {
       // Insert new record (store session info without full sync)
+      // Use 'realtime' as placeholder agent_id since realtime sessions don't have a proper agent_id
+      console.log(`Inserting new record: session_id=${sessionId}, project_id=${projectId}`)
       await pool.query(
-        'INSERT INTO conversations (session_id, project_id, title, message_count) VALUES (?, ?, ?, ?)',
-        [sessionId, projectId || null, `Session ${sessionId}`, 0]
+        'INSERT INTO conversations (session_id, agent_id, project_id, custom_tags, title, message_count) VALUES (?, ?, ?, ?, ?, ?)',
+        [sessionId, 'realtime', projectId, tagsJson, `Session ${sessionId}`, 0]
       )
     }
     
-    // Note: Custom tags are stored in memory only for this session
-    // In a production system, you'd want a separate table for session_tags
-    
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, sessionId, projectId, customTags })
   } catch (error) {
     console.error('Failed to update session:', error)
     return NextResponse.json({ error: '更新会话失败' }, { status: 500 })
