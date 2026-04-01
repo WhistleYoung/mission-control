@@ -1,5 +1,5 @@
 {
-  "worker": "cli-proxy/qwen3-coder-plus",
+  "worker": "cli-proxy/MiniMax-M2.5",
   "main": "minimax/MiniMax-M2.7",
   "devper": "minimax/MiniMax-M2.7"
 }

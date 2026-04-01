@@ -25,20 +25,36 @@ function restartGateway() {
 }
 
 function getAgentIdentityName(agentId: string, agentName?: string): string {
-  // If agent has a name in config, use it
-  if (agentName) return agentName
-  // Fallback to hardcoded names for known agents
+  // Use hardcoded Chinese names for known agents
   const names: Record<string, string> = {
     main: '小七',
     worker: '壹号牛马',
   }
+  // If agent has a name in config and it's different from the id, use it
+  if (agentName && agentName !== agentId && !names[agentId]) {
+    return agentName
+  }
   return names[agentId] || agentId
 }
 
-function getAgentIdentityEmoji(agentId: string): string {
+function getAgentIdentityEmoji(agentId: string, workspacePath?: string): string {
+  // Try to read from IDENTITY.md first
+  if (workspacePath) {
+    try {
+      const identityPath = join(workspacePath, 'IDENTITY.md')
+      if (existsSync(identityPath)) {
+        const content = readFileSync(identityPath, 'utf-8')
+        const match = content.match(/- \*\*Emoji:\*\* (.+)/)
+        if (match) return match[1].trim()
+      }
+    } catch (e) {}
+  }
+  
+  // Fallback to hardcoded emojis
   const emojis: Record<string, string> = {
     main: '🧑💻',
     worker: '🐂',
+    devper: '🎸',
   }
   return emojis[agentId] || '🤖'
 }
@@ -167,7 +183,7 @@ export async function GET(request: NextRequest) {
       id: agent.id,
       name: agent.name,
       identityName: getAgentIdentityName(agent.id, agent.name),
-      identityEmoji: getAgentIdentityEmoji(agent.id),
+      identityEmoji: getAgentIdentityEmoji(agent.id, agent.workspace),
       model: localModel || agent.model || 'unknown',
       workspace: agent.workspace,
       isDefault: agent.id === 'main',
@@ -328,7 +344,7 @@ export async function PUT(request: NextRequest) {
   if (errorResponse) return errorResponse
 
   try {
-    const { id, model, boundChannel } = await request.json()
+    const { id, model, boundChannel, name, emoji } = await request.json()
     
     if (!id) {
       return NextResponse.json({ error: 'Missing agent ID' }, { status: 400 })
@@ -349,6 +365,18 @@ export async function PUT(request: NextRequest) {
       }
       writeFileSync(LOCAL_CONFIG, JSON.stringify(localModels, null, 2))
     }
+    
+    // Find agent workspace path first
+    let agentWorkspace = ''
+    try {
+      if (existsSync(OPENCLAW_CONFIG)) {
+        const openclawConfig = JSON.parse(readFileSync(OPENCLAW_CONFIG, 'utf-8'))
+        const agent = openclawConfig.agents?.list?.find((a: any) => a.id === id)
+        if (agent?.workspace) {
+          agentWorkspace = agent.workspace
+        }
+      }
+    } catch (e) {}
     
     try {
       if (existsSync(OPENCLAW_CONFIG)) {
@@ -373,10 +401,17 @@ export async function PUT(request: NextRequest) {
           }
         }
         
-        if (model && openclawConfig.agents?.list) {
+        if (openclawConfig.agents?.list) {
           const agentIndex = openclawConfig.agents.list.findIndex((a: any) => a.id === id)
           if (agentIndex !== -1) {
-            openclawConfig.agents.list[agentIndex].model = model
+            if (model) {
+              openclawConfig.agents.list[agentIndex].model = model
+            }
+            if (name !== undefined) {
+              openclawConfig.agents.list[agentIndex].name = name
+            }
+            // Note: emoji is NOT saved to openclaw.json - OpenClaw schema doesn't support it
+            // Emoji is saved to IDENTITY.md instead
           }
         }
         
@@ -386,10 +421,30 @@ export async function PUT(request: NextRequest) {
       console.log('Could not update OpenClaw config:', e)
     }
     
+    // Save emoji to IDENTITY.md if provided
+    if (emoji !== undefined && agentWorkspace) {
+      try {
+        const identityPath = join(agentWorkspace, 'IDENTITY.md')
+        if (existsSync(identityPath)) {
+          let content = readFileSync(identityPath, 'utf-8')
+          // Replace or add emoji line
+          if (content.includes('- **Emoji:**')) {
+            content = content.replace(/- \*\*Emoji:\*\* .*/, `- **Emoji:** ${emoji}`)
+          } else {
+            // Add after IDENTITY.md header
+            content = content.replace(/(# IDENTITY.*?\n)/, `$1- **Emoji:** ${emoji}\n`)
+          }
+          writeFileSync(identityPath, content)
+        }
+      } catch (e) {
+        console.error('Failed to update IDENTITY.md emoji:', e)
+      }
+    }
+    
     // Restart gateway to reload config
     restartGateway()
     
-    return NextResponse.json({ success: true, model, boundChannel })
+    return NextResponse.json({ success: true, model, boundChannel, name, emoji })
   } catch (error) {
     console.error('Failed to update agent:', error)
     return NextResponse.json({ error: 'Failed to update agent' }, { status: 500 })

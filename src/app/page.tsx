@@ -7,9 +7,10 @@ import {
   MoreHorizontal, ChevronDown, Clock, User, Bot, X, Check, RefreshCw,
   Activity, Terminal, ChevronLeft, ChevronRight, Sparkles, LogOut, Trash2,
   Network, Zap, ExternalLink, FileText, Filter, RefreshCw as RefreshCwIcon,
+  Key,
 } from 'lucide-react'
 
-type Tab = 'inbox' | 'calendar' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'lobster' | 'logs'
+type Tab = 'inbox' | 'calendar' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs'
 type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'in-review' | 'done'
 type Priority = 'urgent' | 'high' | 'medium' | 'low'
 type MemoryFilter = 'daily' | 'long-term' | 'all'
@@ -978,13 +979,14 @@ const TaskCard = ({ task, onDelete }: { task: Task; onDelete: (id: number) => vo
   )
 }
 
-const AgentCard = ({ agent, onModelChange, onDelete, channels, onChannelChange, onEditSoul }: { 
+const AgentCard = ({ agent, onModelChange, onDelete, channels, onChannelChange, onEditSoul, onEditInfo }: { 
   agent: Agent; 
   onModelChange: (agentId: string, newModel: string) => void
   onDelete: (agentId: string) => void
   channels: Channel[]
   onChannelChange: (agentId: string, newChannel: string) => void
   onEditSoul: (agent: Agent) => void
+  onEditInfo: (agent: Agent) => void
 }) => {
   const [isEditing, setIsEditing] = useState(false)
   const [selectedModel, setSelectedModel] = useState(agent.model)
@@ -1051,6 +1053,9 @@ const AgentCard = ({ agent, onModelChange, onDelete, channels, onChannelChange, 
               </button>
               <button onClick={() => { onEditSoul(agent); setShowMenu(false) }} className="w-full px-3 py-2 text-sm text-left text-gray-300 hover:bg-gray-700 flex items-center gap-2">
                 <Brain className="w-4 h-4" />编辑人格
+              </button>
+              <button onClick={() => { onEditInfo(agent); setShowMenu(false) }} className="w-full px-3 py-2 text-sm text-left text-gray-300 hover:bg-gray-700 flex items-center gap-2">
+                <Bot className="w-4 h-4" />编辑名称/头像
               </button>
               {!agent.isDefault && (
                 <button onClick={() => { if(confirm('确定删除此员工？工作文件夹也将被删除！')) { onDelete(agent.id) }; setShowMenu(false) }} className="w-full px-3 py-2 text-sm text-left text-red-400 hover:bg-gray-700 flex items-center gap-2">
@@ -1163,6 +1168,15 @@ export default function MissionControl() {
   const [copyTargetAgents, setCopyTargetAgents] = useState<string[]>([])
   const [isCopying, setIsCopying] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [installToAllAgents, setInstallToAllAgents] = useState(true)
+  const [selectedInstallTargets, setSelectedInstallTargets] = useState<string[]>([])
+  const [showClawhubSettings, setShowClawhubSettings] = useState(false)
+  const [clawhubApiToken, setClawhubApiToken] = useState('')
+  const [isSavingToken, setIsSavingToken] = useState(false)
+  const [clawhubLoggedIn, setClawhubLoggedIn] = useState(false)
+  const [clawhubUser, setClawhubUser] = useState<string | null>(null)
+  const [installDropdownOpen, setInstallDropdownOpen] = useState<string | null>(null)
+  const [tempInstallTargets, setTempInstallTargets] = useState<string[]>([])
   const [memories, setMemories] = useState<MemoryEntry[]>([])
   const [channels, setChannels] = useState<Channel[]>([])
   const [searchQuery, setSearchQuery] = useState('')
@@ -1173,7 +1187,6 @@ export default function MissionControl() {
   const [activityExpanded, setActivityExpanded] = useState(true)
   const [currentUser, setCurrentUser] = useState<{ username: string; displayName: string } | null>(null)
   const [projectName, setProjectName] = useState('Mission Control')
-  const [showLobsterModule, setShowLobsterModule] = useState(true)
   const [memoryFilter, setMemoryFilter] = useState<MemoryFilter>('all')
   const [memoryAgentFilter, setMemoryAgentFilter] = useState<string>('all')
   const [calendarMonth, setCalendarMonth] = useState(new Date())
@@ -1198,6 +1211,7 @@ export default function MissionControl() {
   const [sessionFilter, setSessionFilter] = useState<{ projectId?: number; agentId?: string }>({})
   const [customTags, setCustomTags] = useState<string[]>([])
   const [editingSoulAgent, setEditingSoulAgent] = useState<Agent | null>(null)
+  const [editingAgentInfo, setEditingAgentInfo] = useState<{agent: Agent; name: string; emoji: string} | null>(null)
   const [activeEditTab, setActiveEditTab] = useState<'agents' | 'soul' | 'user'>('soul')
   const [agentsForm, setAgentsForm] = useState({
     sessionStartup: '',
@@ -1242,12 +1256,6 @@ export default function MissionControl() {
   }, [activeTab])
 
   // Load skills when switching to skills tab
-  useEffect(() => {
-    if (activeTab === 'skills') {
-      fetchInstalledSkills()
-    }
-  }, [activeTab])
-
   const fetchInstalledSkills = async () => {
     try {
       const res = await fetch('/api/skills?action=list')
@@ -1258,12 +1266,35 @@ export default function MissionControl() {
     } catch (e) { console.error('Failed to fetch skills', e) }
   }
 
+  // Fetch ClawHub status
+  const fetchClawhubStatus = async () => {
+    try {
+      const res = await fetch('/api/settings')
+      const data = await res.json()
+      if (data.clawhubLoggedIn !== undefined) {
+        setClawhubLoggedIn(data.clawhubLoggedIn)
+        setClawhubUser(data.clawhubUser)
+      }
+    } catch (e) { console.error('Failed to fetch clawhub status', e) }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'skills') {
+      fetchInstalledSkills()
+      fetchClawhubStatus()
+    }
+  }, [activeTab])
+
   const handleSearchClawhub = async () => {
     if (!clawhubQuery.trim()) return
     setIsSearching(true)
     setClawhubResults([])
     try {
-      const res = await fetch(`/api/skills?action=search&query=${encodeURIComponent(clawhubQuery)}`)
+      const params = new URLSearchParams({ action: 'search', query: clawhubQuery })
+      if (clawhubApiToken) {
+        params.set('apiToken', clawhubApiToken)
+      }
+      const res = await fetch(`/api/skills?${params}`)
       const data = await res.json()
       if (data.success) setClawhubResults(data.results)
     } catch (e) { console.error('Search failed', e) }
@@ -1271,13 +1302,19 @@ export default function MissionControl() {
   }
 
   const handleInstallSkill = async (skillName: string) => {
-    if (!confirm(`确定要安装 "${skillName}" 到所有 Agent 工作区吗？`)) return
+    const targets = installToAllAgents ? 'all' : selectedInstallTargets
+    if (!installToAllAgents && selectedInstallTargets.length === 0) {
+      alert('请选择要安装的目标 Agent')
+      return
+    }
+    const targetMsg = installToAllAgents ? '所有 Agent' : `${selectedInstallTargets.length} 个 Agent`
+    if (!confirm(`确定要安装 "${skillName}" 到 ${targetMsg} 吗？`)) return
     setIsInstalling(true)
     try {
       const res = await fetch('/api/skills', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'install', skillName })
+        body: JSON.stringify({ action: 'install', skillName, targetAgents: targets })
       })
       const data = await res.json()
       alert(data.message)
@@ -1288,6 +1325,90 @@ export default function MissionControl() {
       }
     } catch (e) { alert('安装失败') }
     setIsInstalling(false)
+  }
+
+  const handleSaveClawhubToken = async () => {
+    if (!clawhubApiToken.trim()) {
+      alert('请输入 API Token')
+      return
+    }
+    setIsSavingToken(true)
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clawhubApiToken: clawhubApiToken.trim() })
+      })
+      const data = await res.json()
+      if (data.success) {
+        alert('ClawHub API Token 配置成功！')
+        setShowClawhubSettings(false)
+        setClawhubApiToken('')
+        fetchClawhubStatus()
+      } else {
+        alert(data.error || '配置失败')
+      }
+    } catch (e) { alert('配置请求失败') }
+    setIsSavingToken(false)
+  }
+
+  const toggleInstallTarget = (agentId: string) => {
+    setSelectedInstallTargets(prev =>
+      prev.includes(agentId) ? prev.filter(id => id !== agentId) : [...prev, agentId]
+    )
+  }
+
+  const handleOpenInstallDropdown = (skillName: string) => {
+    setInstallDropdownOpen(skillName)
+    setTempInstallTargets(installToAllAgents ? agents.map(a => a.id) : selectedInstallTargets)
+  }
+
+  const handleCloseInstallDropdown = () => {
+    setInstallDropdownOpen(null)
+    setTempInstallTargets([])
+  }
+
+  const handleConfirmInstall = async (skillName: string) => {
+    setInstallToAllAgents(tempInstallTargets.length === agents.length)
+    setSelectedInstallTargets(tempInstallTargets.length === agents.length ? [] : tempInstallTargets)
+    setInstallDropdownOpen(null)
+    // Now install
+    if (!installToAllAgents && selectedInstallTargets.length === 0) {
+      alert('请选择要安装的目标 Agent')
+      return
+    }
+    const targetMsg = installToAllAgents ? '所有 Agent' : `${selectedInstallTargets.length} 个 Agent`
+    if (!confirm(`确定要安装 "${skillName}" 到 ${targetMsg} 吗？`)) return
+    setIsInstalling(true)
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'install', skillName, targetAgents: installToAllAgents ? 'all' : selectedInstallTargets })
+      })
+      const data = await res.json()
+      alert(data.message)
+      if (data.success) {
+        setClawhubResults([])
+        setClawhubQuery('')
+        fetchInstalledSkills()
+      }
+    } catch (e) { alert('安装失败') }
+    setIsInstalling(false)
+  }
+
+  const toggleTempTarget = (agentId: string) => {
+    setTempInstallTargets(prev =>
+      prev.includes(agentId) ? prev.filter(id => id !== agentId) : [...prev, agentId]
+    )
+  }
+
+  const handleSelectAllAgents = () => {
+    if (tempInstallTargets.length === agents.length) {
+      setTempInstallTargets([])
+    } else {
+      setTempInstallTargets(agents.map(a => a.id))
+    }
   }
 
   const fetchLogs = async () => {
@@ -1354,9 +1475,6 @@ export default function MissionControl() {
       if (settingsRes?.projectName) {
         setProjectName(settingsRes.projectName)
         document.title = settingsRes.projectName
-      }
-      if (settingsRes?.showLobsterModule !== undefined) {
-        setShowLobsterModule(settingsRes.showLobsterModule)
       }
       if (Array.isArray(conversationsRes)) setConversations(conversationsRes)
         
@@ -1468,6 +1586,36 @@ export default function MissionControl() {
       fetchData()
     } catch (error) {
       console.error('Failed to update channel binding:', error)
+      alert('保存失败，请重试')
+    }
+  }
+
+  const handleSaveAgentInfo = async () => {
+    if (!editingAgentInfo) return
+    try {
+      const res = await fetch('/api/agents', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          id: editingAgentInfo.agent.id, 
+          name: editingAgentInfo.name,
+          emoji: editingAgentInfo.emoji 
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        // Update local state
+        setAgents(agents.map(a => 
+          a.id === editingAgentInfo.agent.id 
+            ? { ...a, name: editingAgentInfo.name, identityName: editingAgentInfo.name, identityEmoji: editingAgentInfo.emoji }
+            : a
+        ))
+        setEditingAgentInfo(null)
+      } else {
+        alert('保存失败')
+      }
+    } catch (error) {
+      console.error('Failed to update agent info:', error)
       alert('保存失败，请重试')
     }
   }
@@ -1815,7 +1963,6 @@ ${agentsForm.tools || '无'}`
                 { id: 'timing', label: '定时任务', icon: Clock },
                 { id: 'realtime', label: '实时会话', icon: Zap },
                 { id: 'logs', label: '工具日志', icon: FileText },
-                ...(showLobsterModule ? [{ id: 'lobster' as Tab, label: '龙虾办公室', icon: Sparkles }] : []),
                 { id: 'settings', label: '设置', icon: Settings },
               ].map(item => (
                 <button key={item.id} onClick={() => { setActiveTab(item.id as Tab); setMobileMenuOpen(false) }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 ${activeTab === item.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white'}`}>
@@ -1865,7 +2012,6 @@ ${agentsForm.tools || '无'}`
             { id: 'timing', label: '定时任务', icon: Clock },
             { id: 'realtime', label: '实时会话', icon: Zap },
             { id: 'logs', label: '工具日志', icon: FileText },
-            ...(showLobsterModule ? [{ id: 'lobster' as Tab, label: '龙虾办公室', icon: Sparkles }] : []),
             { id: 'settings', label: '设置', icon: Settings },
           ].map(item => (
             <button key={item.id} onClick={() => setActiveTab(item.id as Tab)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 ${activeTab === item.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white'}`}>
@@ -1909,7 +2055,6 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'timing' && '定时任务'}
               {activeTab === 'realtime' && '实时会话'}
               {activeTab === 'logs' && '工具日志'}
-              {activeTab === 'lobster' && '龙虾办公室'}
               {activeTab === 'settings' && '设置'}
             </h1>
             <span className="text-sm text-gray-500">
@@ -1958,7 +2103,6 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'channels' && '渠道'}
               {activeTab === 'timing' && '定时任务'}
               {activeTab === 'realtime' && '实时会话'}
-              {activeTab === 'lobster' && '龙虾办公室'}
               {activeTab === 'settings' && '设置'}
             </h1>
             <span className="text-sm text-gray-500">
@@ -2137,7 +2281,7 @@ ${agentsForm.tools || '无'}`
           {activeTab === 'agents' && (
             <div className="p-4 md:p-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl">
-                {agents.map(agent => <AgentCard key={agent.id} agent={agent} onModelChange={handleModelChange} onDelete={handleDeleteAgent} channels={channels} onChannelChange={handleChannelChange} onEditSoul={handleEditSoul} />)}
+                {agents.map(agent => <AgentCard key={agent.id} agent={agent} onModelChange={handleModelChange} onDelete={handleDeleteAgent} channels={channels} onChannelChange={handleChannelChange} onEditSoul={handleEditSoul} onEditInfo={(agent) => setEditingAgentInfo({ agent, name: agent.identityName, emoji: agent.identityEmoji })} />)}
               </div>
             </div>
           )}
@@ -2234,8 +2378,80 @@ ${agentsForm.tools || '无'}`
 
               {skillsTab === 'search' && (
                 <div>
+                  {/* Header with settings */}
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-medium text-white">搜索安装</h3>
+                    <button
+                      onClick={() => setShowClawhubSettings(!showClawhubSettings)}
+                      className="p-2 hover:bg-gray-800 rounded-lg transition-colors"
+                      title="ClawHub 设置"
+                    >
+                      <Settings className="w-5 h-5 text-gray-400" />
+                    </button>
+                  </div>
+
+                  {/* ClawHub Settings Panel */}
+                  {showClawhubSettings && (
+                    <div className="bg-gray-900/30 rounded-xl border border-gray-800 p-4 mb-6">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Key className="w-4 h-4 text-blue-400" />
+                        <span className="text-sm text-gray-300 font-medium">ClawHub API Token（解决搜索限流）</span>
+                        {clawhubLoggedIn && (
+                          <span className="px-2 py-0.5 text-xs bg-green-500/20 text-green-400 rounded">
+                            已配置 {clawhubUser ? `(${clawhubUser})` : ''}
+                          </span>
+                        )}
+                      </div>
+                      {!clawhubLoggedIn ? (
+                        <>
+                          <div className="flex gap-2">
+                            <input
+                              type="password"
+                              value={clawhubApiToken}
+                              onChange={e => setClawhubApiToken(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && handleSaveClawhubToken()}
+                              placeholder="输入 ClawHub API Token"
+                              className="linear-input flex-1 text-sm"
+                            />
+                            <button
+                              onClick={handleSaveClawhubToken}
+                              disabled={isSavingToken}
+                              className="linear-btn-primary text-sm px-4 disabled:opacity-50"
+                            >
+                              {isSavingToken ? '保存中...' : '保存'}
+                            </button>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2">
+                            前往 <a href="https://clawhub.ai" target="_blank" className="text-blue-400 hover:underline">clawhub.ai</a> 获取 API Token，配置后可避免搜索限流
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-sm text-green-400 mb-3">✓ ClawHub 已配置成功</p>
+                          <div className="flex gap-2">
+                            <input
+                              type="password"
+                              value={clawhubApiToken}
+                              onChange={e => setClawhubApiToken(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && handleSaveClawhubToken()}
+                              placeholder="输入新 Token 替换当前配置"
+                              className="linear-input flex-1 text-sm"
+                            />
+                            <button
+                              onClick={handleSaveClawhubToken}
+                              disabled={isSavingToken}
+                              className="linear-btn-primary text-sm px-4 disabled:opacity-50"
+                            >
+                              {isSavingToken ? '更新中...' : '更新'}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
                   {/* Search box */}
-                  <div className="flex gap-2 mb-6">
+                  <div className="flex gap-2 mb-4">
                     <input
                       type="text"
                       value={clawhubQuery}
@@ -2253,6 +2469,8 @@ ${agentsForm.tools || '无'}`
                     </button>
                   </div>
 
+
+
                   {/* Search results */}
                   {clawhubResults.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
@@ -2267,13 +2485,79 @@ ${agentsForm.tools || '无'}`
                             </div>
                           </div>
                           <p className="text-sm text-gray-400 line-clamp-2 mb-3">{result.description || '无描述'}</p>
-                          <button
-                            onClick={() => handleInstallSkill(result.name)}
-                            disabled={isInstalling}
-                            className="w-full px-3 py-1.5 text-sm bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors disabled:opacity-50"
-                          >
-                            {isInstalling ? '安装中...' : '安装到所有 Agent'}
-                          </button>
+                          
+                          {/* Install dropdown */}
+                          <div className="relative">
+                            <button
+                              onClick={() => installDropdownOpen === result.name ? handleCloseInstallDropdown() : handleOpenInstallDropdown(result.name)}
+                              disabled={isInstalling}
+                              className="w-full px-3 py-1.5 text-sm bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                            >
+                              {isInstalling ? '安装中...' : (
+                                <>
+                                  <span>安装到</span>
+                                  <ChevronDown className="w-4 h-4" />
+                                </>
+                              )}
+                            </button>
+                            
+                            {installDropdownOpen === result.name && (
+                              <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-10 p-2">
+                                <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-700">
+                                  <span className="text-xs text-gray-400">选择安装目标</span>
+                                  <button
+                                    onClick={handleSelectAllAgents}
+                                    className="text-xs text-blue-400 hover:text-blue-300"
+                                  >
+                                    {tempInstallTargets.length === agents.length ? '取消全选' : '全选'}
+                                  </button>
+                                </div>
+                                <div className="max-h-40 overflow-y-auto space-y-1">
+                                  {agents.map(a => (
+                                    <label key={a.id} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-700 rounded cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={tempInstallTargets.includes(a.id)}
+                                        onChange={() => toggleTempTarget(a.id)}
+                                        className="w-4 h-4 accent-green-500"
+                                      />
+                                      <span className="text-sm text-gray-200">{a.identityEmoji} {a.identityName}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                                <div className="mt-2 pt-2 border-t border-gray-700">
+                                  <button
+                                    onClick={() => {
+                                      setInstallToAllAgents(tempInstallTargets.length === agents.length)
+                                      setSelectedInstallTargets(tempInstallTargets.length === agents.length ? [] : tempInstallTargets)
+                                      handleCloseInstallDropdown()
+                                      // Trigger install
+                                      const targetMsg = tempInstallTargets.length === agents.length ? '所有 Agent' : `${tempInstallTargets.length} 个 Agent`
+                                      if (!confirm(`确定要安装 "${result.name}" 到 ${targetMsg} 吗？`)) return
+                                      setIsInstalling(true)
+                                      fetch('/api/skills', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ action: 'install', skillName: result.name, targetAgents: tempInstallTargets.length === agents.length ? 'all' : tempInstallTargets })
+                                      }).then(r => r.json()).then(data => {
+                                        alert(data.message)
+                                        if (data.success) {
+                                          setClawhubResults([])
+                                          setClawhubQuery('')
+                                          fetchInstalledSkills()
+                                        }
+                                        setIsInstalling(false)
+                                      }).catch(() => { alert('安装失败'); setIsInstalling(false) })
+                                    }}
+                                    disabled={tempInstallTargets.length === 0}
+                                    className="w-full px-3 py-1.5 text-sm bg-green-500 text-white hover:bg-green-600 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                  >
+                                    确认安装 ({tempInstallTargets.length})
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -2365,42 +2649,6 @@ ${agentsForm.tools || '无'}`
                         }
                       } catch { alert('修改失败') }
                     }} className="linear-btn-primary">保存</button>
-                  </div>
-                </div>
-                
-                {/* Module Settings */}
-                <div className="border-t border-gray-800 pt-4 mt-4">
-                  <label className="block text-sm text-gray-400 mb-1.5">模块设置</label>
-                  <div className="flex items-center justify-between py-2">
-                    <div>
-                      <span className="text-white">🦞 龙虾办公室模块</span>
-                      <p className="text-xs text-gray-500 mt-0.5">在侧边栏显示龙虾办公室入口</p>
-                    </div>
-                    <button 
-                      onClick={async () => {
-                        const newValue = !showLobsterModule
-                        try {
-                          const res = await fetch('/api/settings', {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ showLobsterModule: newValue }),
-                          })
-                          const data = await res.json()
-                          if (data.success) {
-                            setShowLobsterModule(newValue)
-                            if (!newValue && String(activeTab) === 'lobster') {
-                              setActiveTab('inbox')
-                            }
-                            alert(newValue ? '龙虾办公室模块已显示' : '龙虾办公室模块已隐藏')
-                          } else {
-                            alert(data.error || '修改失败')
-                          }
-                        } catch { alert('修改失败') }
-                      }}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${showLobsterModule ? 'bg-blue-500' : 'bg-gray-600'}`}
-                    >
-                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${showLobsterModule ? 'translate-x-6' : 'translate-x-1'}`} />
-                    </button>
                   </div>
                 </div>
               </div>
@@ -2817,16 +3065,6 @@ ${agentsForm.tools || '无'}`
               </div>
             </div>
           )}
-
-          {/* Star Office UI - 龙虾办公室 iframe */}
-          {activeTab === 'lobster' && showLobsterModule && (
-            <iframe 
-              src="http://opp.bullrom.cn:19000?token=star_office_secret_2024" 
-              className="w-full h-full border-0"
-              title="Star Office UI"
-              allow="fullscreen"
-            />
-          )}
         </div>
       </main>
 
@@ -3031,6 +3269,51 @@ ${agentsForm.tools || '无'}`
           </div>
         </div>
       )}
+
+      {/* Edit Agent Name/Emoji Modal */}
+      {editingAgentInfo && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setEditingAgentInfo(null)}>
+          <div className="bg-gray-800 rounded-xl w-full max-w-md border border-gray-700" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-gray-700">
+              <h3 className="text-lg font-semibold text-white">编辑员工信息</h3>
+              <button onClick={() => setEditingAgentInfo(null)} className="p-1 hover:bg-gray-700 rounded">
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">员工名称（显示名称，非ID）</label>
+                <input
+                  type="text"
+                  value={editingAgentInfo.name}
+                  onChange={e => setEditingAgentInfo({ ...editingAgentInfo, name: e.target.value })}
+                  className="linear-input w-full"
+                  placeholder="输入员工显示名称"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">员工头像</label>
+                <div className="grid grid-cols-8 gap-2">
+                  {['🤖', '🧑‍💻', '🧑‍🔧', '🧑‍🎨', '🧑‍💼', '🧑‍🔬', '🧑‍🚀', '🧑‍🏫', '🐂', '🦊', '🐸', '🦄', '🐼', '🐨', '🦁', '🐯', '🌟', '💡', '🎯', '🚀', '⚡', '🔥', '💎', '🎸'].map(e => (
+                    <button
+                      key={e}
+                      onClick={() => setEditingAgentInfo({ ...editingAgentInfo, emoji: e })}
+                      className={`w-10 h-10 text-xl rounded-lg border ${editingAgentInfo.emoji === e ? 'border-blue-500 bg-blue-500/20' : 'border-gray-600 bg-gray-700 hover:border-gray-500'}`}
+                    >
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 p-4 border-t border-gray-700">
+              <button onClick={() => setEditingAgentInfo(null)} className="linear-btn-secondary">取消</button>
+              <button onClick={handleSaveAgentInfo} className="linear-btn-primary">保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ProjectHistoryModal isOpen={showProjectHistoryModal} onClose={() => setShowProjectHistoryModal(false)} project={selectedProjectForHistory} history={projectHistory} />
       <ConversationDetailModal 
         isOpen={showConversationDetail} 

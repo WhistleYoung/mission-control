@@ -3,6 +3,9 @@ import { pool, db } from '@/lib/db'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import type { NextRequest } from 'next/server'
 import { execSync } from 'child_process'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync } from 'fs'
+import { join } from 'path'
 
 // Ensure settings table exists - SQLite compatible version
 function ensureSettingsTable() {
@@ -34,6 +37,57 @@ function ensureSettingsTable() {
   }
 }
 
+// Get ClawHub config directory
+function getClawhubConfigDir(): string {
+  return join(process.env.HOME || '/home/bullrom', '.config', 'clawhub')
+}
+
+// Ensure ClawHub config directory exists
+function ensureClawhubConfigDir(): string {
+  const dir = getClawhubConfigDir()
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+  return dir
+}
+
+// Update ClawHub API token using clawhub login command
+function updateClawhubToken(token: string): { success: boolean; message: string } {
+  try {
+    // Use clawhub login with --token --no-browser to store the token
+    execSync(`clawhub login --token "${token}" --no-browser`, { timeout: 30000 })
+    return { success: true, message: 'Token 配置成功！' }
+  } catch (e: any) {
+    console.error('Failed to configure clawhub token:', e.message)
+    return { success: false, message: 'Token 配置失败: ' + e.message }
+  }
+}
+
+// Check if ClawHub token is configured
+function isClawhubTokenConfigured(): boolean {
+  try {
+    const output = execSync(`clawhub whoami 2>&1`, { timeout: 10000 })
+    const text = output.toString()
+    return !text.includes('Not logged in') && !text.includes('Error')
+  } catch (e) {
+    return false
+  }
+}
+
+// Get current ClawHub logged in user
+function getClawhubUser(): string | null {
+  try {
+    const output = execSync(`clawhub whoami 2>&1`, { timeout: 10000 })
+    const text = output.toString()
+    if (text.includes('Not logged in') || text.includes('Error')) return null
+    // Extract username from output like "Logged in as: username"
+    const match = text.match(/Logged in as:\s*(.+)/)
+    return match ? match[1].trim() : null
+  } catch (e) {
+    return null
+  }
+}
+
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
@@ -43,9 +97,15 @@ export async function GET(request: NextRequest) {
     ensureSettingsTable()
     const row = db.prepare('SELECT * FROM settings WHERE id = 1').get() as any
     
+    // Check ClawHub login status
+    const clawhubLoggedIn = isClawhubTokenConfigured()
+    const clawhubUser = getClawhubUser()
+    
     return NextResponse.json({
       projectName: row?.project_name || 'Mission Control',
       showLobsterModule: row?.show_lobster_module !== 0,
+      clawhubLoggedIn,
+      clawhubUser,
     })
   } catch (error) {
     console.error('Failed to fetch settings:', error)
@@ -60,7 +120,7 @@ export async function PUT(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { projectName, newUsername, showLobsterModule } = body
+    const { projectName, newUsername, showLobsterModule, clawhubApiToken } = body
 
     ensureSettingsTable()
 
@@ -69,14 +129,18 @@ export async function PUT(request: NextRequest) {
       db.prepare('UPDATE settings SET project_name = ? WHERE id = 1').run(projectName)
     }
 
-    // Update show lobster module setting
-    if (showLobsterModule !== undefined) {
-      db.prepare('UPDATE settings SET show_lobster_module = ? WHERE id = 1').run(showLobsterModule ? 1 : 0)
-    }
-
     // Update username
     if (newUsername) {
       db.prepare('UPDATE users SET username = ?, display_name = ? WHERE id = 1').run(newUsername, newUsername)
+    }
+
+    // Update ClawHub API Token
+    if (clawhubApiToken !== undefined) {
+      const result = updateClawhubToken(clawhubApiToken)
+      if (!result.success) {
+        return NextResponse.json({ error: result.message }, { status: 500 })
+      }
+      return NextResponse.json({ success: true, message: result.message })
     }
 
     return NextResponse.json({ success: true })

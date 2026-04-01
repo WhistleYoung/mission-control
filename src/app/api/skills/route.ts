@@ -86,10 +86,27 @@ function listInstalledSkills() {
   return result
 }
 
-// Search clawhub for skills
-function searchClawhub(query: string): any[] {
+// Get clawhub token from openclaw.json
+function getClawhubToken(): string | undefined {
   try {
-    const output = execSync(`clawhub search "${query}"`, { timeout: 30000 })
+    if (existsSync(OPENCLAW_CONFIG)) {
+      const config = JSON.parse(readFileSync(OPENCLAW_CONFIG, 'utf-8'))
+      return config.env?.CLAWHUB_TOKEN || undefined
+    }
+  } catch (e) {}
+  return undefined
+}
+
+// Search clawhub for skills
+function searchClawhub(query: string, apiToken?: string): any[] {
+  try {
+    let cmd = `clawhub search "${query}"`
+    // Use token from openclaw.json if not provided via API
+    const token = apiToken || getClawhubToken()
+    if (token) {
+      cmd = `CLAWHUB_TOKEN=${token} ${cmd}`
+    }
+    const output = execSync(cmd, { timeout: 30000 })
     const text = output.toString()
     
     // Parse clawhub search output (simple text parsing)
@@ -116,13 +133,21 @@ function searchClawhub(query: string): any[] {
   }
 }
 
-// Install a skill to all agent workspaces
-function installSkillToAllAgents(skillName: string): { success: boolean; message: string; installed: string[] } {
-  const agents = getAgentWorkspaces()
-  const installed: string[] = []
-  const errors: string[] = []
+// ClawHub login
+// (removed - now using API token instead)
 
-  for (const agent of agents) {
+// Install a skill to specified agents
+function installSkillToAgents(skillName: string, targetAgents: 'all' | string[]): { success: boolean; message: string; installed: string[]; failed: string[] } {
+  const allAgents = getAgentWorkspaces()
+  const installed: string[] = []
+  const failed: string[] = []
+
+  // Filter to only target agents
+  const agentsToInstall = targetAgents === 'all' 
+    ? allAgents 
+    : allAgents.filter(a => (targetAgents as string[]).includes(a.id))
+
+  for (const agent of agentsToInstall) {
     try {
       // Ensure skills directory exists
       const skillsDir = join(agent.workspace, 'skills')
@@ -136,18 +161,21 @@ function installSkillToAllAgents(skillName: string): { success: boolean; message
     } catch (e: any) {
       const msg = `Failed to install to ${agent.name}: ${e.message}`
       console.error(msg)
-      errors.push(msg)
+      failed.push(`${agent.name} (${e.message})`)
     }
   }
 
   if (installed.length === 0) {
-    return { success: false, message: `安装失败: ${errors.join(', ')}`, installed }
+    return { success: false, message: `安装失败: ${failed.join(', ')}`, installed, failed }
   }
 
   return { 
     success: true, 
-    message: `成功安装到 ${installed.length} 个Agent: ${installed.join(', ')}`,
-    installed 
+    message: failed.length === 0 
+      ? `成功安装到 ${installed.length} 个Agent: ${installed.join(', ')}`
+      : `安装到 ${installed.length} 个Agent成功, ${failed.length} 个失败: ${failed.join(', ')}`, 
+    installed,
+    failed
   }
 }
 
@@ -169,7 +197,7 @@ function copySkillToAgents(skillDir: string, sourceAgentId: string, targetAgentI
 
   for (const targetId of targetAgentIds) {
     if (targetId === sourceAgentId) continue // Skip self
-    
+
     const targetAgent = agents.find(a => a.id === targetId)
     if (!targetAgent) {
       failed.push(`${targetId} (Agent不存在)`)
@@ -181,14 +209,14 @@ function copySkillToAgents(skillDir: string, sourceAgentId: string, targetAgentI
       if (!existsSync(targetSkillDir)) {
         mkdirSync(targetSkillDir, { recursive: true })
       }
-      
+
       const targetSkillPath = join(targetSkillDir, skillDir)
-      
+
       // Remove existing skill if present
       if (existsSync(targetSkillPath)) {
         execSync(`rm -rf "${targetSkillPath}"`)
       }
-      
+
       // Copy skill directory
       cpSync(sourceSkillPath, targetSkillPath, { recursive: true, dereference: true })
       copied.push(targetAgent.name)
@@ -198,13 +226,13 @@ function copySkillToAgents(skillDir: string, sourceAgentId: string, targetAgentI
     }
   }
 
-  return { 
-    success: copied.length > 0, 
-    message: failed.length === 0 
+  return {
+    success: copied.length > 0,
+    message: failed.length === 0
       ? `成功复制到 ${copied.length} 个Agent: ${copied.join(', ')}`
       : `复制到 ${copied.length} 个Agent成功, ${failed.length} 个失败: ${failed.join(', ')}`,
-    copied, 
-    failed 
+    copied,
+    failed
   }
 }
 
@@ -248,7 +276,8 @@ export async function GET(request: NextRequest) {
       if (!query) {
         return NextResponse.json({ error: '搜索关键词不能为空' }, { status: 400 })
       }
-      const results = searchClawhub(query)
+      const username = searchParams.get('username') || undefined
+      const results = searchClawhub(query, username)
       return NextResponse.json({ success: true, results })
     } else if (action === 'agents') {
       // Get all agents with their workspaces
@@ -275,7 +304,17 @@ export async function POST(request: NextRequest) {
       if (!skillName) {
         return NextResponse.json({ error: '技能名称不能为空' }, { status: 400 })
       }
-      const result = installSkillToAllAgents(skillName)
+      // targetAgents can be 'all' or string[]
+      const targetsRaw = targetAgents
+      let targets: string[]
+      if (!targetsRaw || targetsRaw === 'all' || (Array.isArray(targetsRaw) && targetsRaw.length === 0)) {
+        targets = getAgentWorkspaces().map(a => a.id)
+      } else if (Array.isArray(targetsRaw)) {
+        targets = targetsRaw
+      } else {
+        targets = getAgentWorkspaces().map(a => a.id)
+      }
+      const result = installSkillToAgents(skillName, targets)
       return NextResponse.json(result)
     }
 
