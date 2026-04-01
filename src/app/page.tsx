@@ -684,6 +684,170 @@ const ConversationDetailModal = ({ isOpen, onClose, conversation, messages, proj
   )
 }
 
+// Helper function to get short description
+function getShortDescription(description: string): string {
+  if (!description) return '暂无描述'
+  if (description.length <= 60) return description
+  return description.substring(0, 60) + '...'
+}
+
+// Skill Detail Modal
+const SkillDetailModal = ({ skill, agents, installedSkillsByAgent, onClose, onCopySuccess, onDeleteSuccess }: { 
+  skill: { name: string; description: string; directory: string; sourceAgentId: string; sourceAgentName: string } | null
+  agents: any[]
+  installedSkillsByAgent: {agentId: string; agentName: string; skills: any[]}[]
+  onClose: () => void
+  onCopySuccess: () => void
+  onDeleteSuccess: () => void
+}) => {
+  const [selectedTargets, setSelectedTargets] = useState<string[]>([])
+  const [isCopying, setIsCopying] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  if (!skill) return null
+
+  // Get other agents that don't have this skill yet
+  const otherAgents = agents.filter(a => {
+    // Exclude source agent
+    if (a.id === skill.sourceAgentId) return false
+    // Check if this agent already has the skill
+    const agentData = installedSkillsByAgent.find(ag => ag.agentId === a.id)
+    if (!agentData) return true
+    return !agentData.skills.some((s: any) => s.directory === skill.directory)
+  })
+
+  const toggleTarget = (agentId: string) => {
+    setSelectedTargets(prev => 
+      prev.includes(agentId) 
+        ? prev.filter(id => id !== agentId)
+        : [...prev, agentId]
+    )
+  }
+
+  const handleCopy = async () => {
+    if (selectedTargets.length === 0) {
+      alert('请选择要复制到的目标 Agent')
+      return
+    }
+    setIsCopying(true)
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'copy',
+          skillDir: skill.directory,
+          sourceAgentId: skill.sourceAgentId,
+          targetAgentIds: selectedTargets
+        })
+      })
+      const data = await res.json()
+      alert(data.message)
+      if (data.success) {
+        setSelectedTargets([])
+        onCopySuccess()
+        onClose()
+      }
+    } catch (e) {
+      alert('复制失败')
+    }
+    setIsCopying(false)
+  }
+
+  const handleDelete = async () => {
+    if (!confirm(`确定要从 "${skill.sourceAgentName}" 删除技能 "${skill.name}" 吗？此操作不可恢复。`)) return
+    setIsDeleting(true)
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'delete',
+          skillDir: skill.directory,
+          agentId: skill.sourceAgentId
+        })
+      })
+      const data = await res.json()
+      alert(data.message)
+      if (data.success) {
+        onDeleteSuccess()
+        onClose()
+      }
+    } catch (e) {
+      alert('删除失败')
+    }
+    setIsDeleting(false)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-gray-800 rounded-xl w-full max-w-lg border border-gray-700" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-gray-700">
+          <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-green-400" />
+            {skill.name}
+          </h3>
+          <button onClick={onClose} className="p-1 hover:bg-gray-700 rounded">
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
+        </div>
+        <div className="p-4 space-y-4">
+          <div>
+            <label className="text-sm text-gray-400 mb-1 block">技能标识</label>
+            <p className="text-white font-mono text-sm bg-gray-900/50 px-3 py-2 rounded">{skill.directory}</p>
+          </div>
+          <div>
+            <label className="text-sm text-gray-400 mb-1 block">所属 Agent</label>
+            <span className="inline-block px-3 py-1 bg-blue-500/20 text-blue-400 text-sm rounded-lg">{skill.sourceAgentName}</span>
+          </div>
+          <div>
+            <label className="text-sm text-gray-400 mb-1 block">详细说明</label>
+            <p className="text-white text-sm bg-gray-900/50 px-3 py-2 rounded whitespace-pre-wrap max-h-40 overflow-y-auto">{skill.description || '暂无描述'}</p>
+          </div>
+          
+          {/* Copy to other agents */}
+          {otherAgents.length > 0 && (
+            <div>
+              <label className="text-sm text-gray-400 mb-2 block">复制到其他 Agent</label>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {otherAgents.map(a => (
+                  <button
+                    key={a.id}
+                    onClick={() => toggleTarget(a.id)}
+                    className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                      selectedTargets.includes(a.id)
+                        ? 'bg-green-500/30 text-green-400 border border-green-500/50'
+                        : 'bg-gray-700 text-gray-300 border border-gray-600 hover:border-gray-500'
+                    }`}
+                  >
+                    {a.identityEmoji} {a.identityName}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={handleCopy}
+                disabled={isCopying || selectedTargets.length === 0}
+                className="w-full px-4 py-2 bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isCopying ? '复制中...' : `复制到 ${selectedTargets.length} 个 Agent`}
+              </button>
+            </div>
+          )}
+          
+          {/* Delete skill */}
+          <button
+            onClick={handleDelete}
+            disabled={isDeleting}
+            className="w-full px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {isDeleting ? '删除中...' : `从 ${skill.sourceAgentName} 删除此技能`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const ProjectHistoryModal = ({ isOpen, onClose, project, history }: {
   isOpen: boolean; onClose: () => void; project: Project | null; history: ProjectHistory[]
 }) => {
@@ -989,6 +1153,16 @@ export default function MissionControl() {
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
+  const [installedSkillsByAgent, setInstalledSkillsByAgent] = useState<{agentId: string; agentName: string; skills: any[]}[]>([])
+  const [clawhubQuery, setClawhubQuery] = useState('')
+  const [clawhubResults, setClawhubResults] = useState<any[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [isInstalling, setIsInstalling] = useState(false)
+  const [skillsTab, setSkillsTab] = useState<'installed' | 'search'>('installed')
+  const [selectedSkill, setSelectedSkill] = useState<{name: string; description: string; directory: string; sourceAgentId: string; sourceAgentName: string} | null>(null)
+  const [copyTargetAgents, setCopyTargetAgents] = useState<string[]>([])
+  const [isCopying, setIsCopying] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const [memories, setMemories] = useState<MemoryEntry[]>([])
   const [channels, setChannels] = useState<Channel[]>([])
   const [searchQuery, setSearchQuery] = useState('')
@@ -1066,6 +1240,55 @@ export default function MissionControl() {
       fetchLogs()
     }
   }, [activeTab])
+
+  // Load skills when switching to skills tab
+  useEffect(() => {
+    if (activeTab === 'skills') {
+      fetchInstalledSkills()
+    }
+  }, [activeTab])
+
+  const fetchInstalledSkills = async () => {
+    try {
+      const res = await fetch('/api/skills?action=list')
+      const data = await res.json()
+      if (data.success) {
+        setInstalledSkillsByAgent(data.skills)
+      }
+    } catch (e) { console.error('Failed to fetch skills', e) }
+  }
+
+  const handleSearchClawhub = async () => {
+    if (!clawhubQuery.trim()) return
+    setIsSearching(true)
+    setClawhubResults([])
+    try {
+      const res = await fetch(`/api/skills?action=search&query=${encodeURIComponent(clawhubQuery)}`)
+      const data = await res.json()
+      if (data.success) setClawhubResults(data.results)
+    } catch (e) { console.error('Search failed', e) }
+    setIsSearching(false)
+  }
+
+  const handleInstallSkill = async (skillName: string) => {
+    if (!confirm(`确定要安装 "${skillName}" 到所有 Agent 工作区吗？`)) return
+    setIsInstalling(true)
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'install', skillName })
+      })
+      const data = await res.json()
+      alert(data.message)
+      if (data.success) {
+        setClawhubResults([])
+        setClawhubQuery('')
+        fetchInstalledSkills()
+      }
+    } catch (e) { alert('安装失败') }
+    setIsInstalling(false)
+  }
 
   const fetchLogs = async () => {
     const params = new URLSearchParams()
@@ -1922,26 +2145,151 @@ ${agentsForm.tools || '无'}`
           {/* Skills */}
           {activeTab === 'skills' && (
             <div className="p-6">
-              <div className="mb-6">
-                <h3 className="text-lg font-medium text-white mb-2">已安装技能</h3>
-                <p className="text-sm text-gray-500">所有 Agent 已安装的技能插件</p>
+              {/* Tab switcher */}
+              <div className="flex items-center gap-4 mb-6">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setSkillsTab('installed')}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${skillsTab === 'installed' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
+                  >
+                    已安装技能
+                  </button>
+                  <button
+                    onClick={() => setSkillsTab('search')}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${skillsTab === 'search' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}
+                  >
+                    搜索安装
+                  </button>
+                </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                {skills.map((skill, i) => (
-                  <div key={i} className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${skill.status === 'ready' ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
-                        <Sparkles className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <h4 className="text-white font-medium text-sm md:text-base">{skill.name}</h4>
-                        <span className={`text-xs px-2 py-0.5 rounded ${skill.status === 'ready' ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{skill.status === 'ready' ? '已安装' : '需配置'}</span>
-                      </div>
+
+              {skillsTab === 'installed' && (
+                <div>
+                  {installedSkillsByAgent.length === 0 ? (
+                    <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-8 text-center">
+                      <Sparkles className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+                      <h3 className="text-white font-medium mb-2">暂无已安装技能</h3>
+                      <p className="text-sm text-gray-500">切换到「搜索安装」标签从 ClawHub 安装新技能</p>
                     </div>
-                    <p className="text-sm text-gray-400">{skill.description}</p>
+                  ) : (
+                    <div className="space-y-6">
+                      {installedSkillsByAgent.map(agentData => (
+                        <div key={agentData.agentId} className="bg-gray-900/30 rounded-xl border border-gray-800 p-4">
+                          <div className="flex items-center gap-3 mb-4">
+                            <Users className="w-5 h-5 text-blue-400" />
+                            <h3 className="text-white font-medium">{agentData.agentName}</h3>
+                            <span className="text-xs text-gray-500">· {agentData.skills.length} 个技能</span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                            {agentData.skills.map((skill: any, i: number) => {
+                              // Simple skill name to Chinese mapping
+                              const nameMap: Record<string, string> = {
+                                'paddleocr-doc-parsing': '文档图片OCR解析',
+                                'self-improving-agent': '自我改进',
+                                'skill-vetter': '技能审核',
+                                'find-skills': '技能发现',
+                                'yunzhiyan-device': '云智眼设备管理',
+                                'ecs-disk-manager': 'ECS磁盘管理',
+                                'agent-browser': '浏览器自动化',
+                                'baidu-search': '百度搜索',
+                                'clawhub': 'ClawHub技能管理',
+                                'weather': '天气查询',
+                                'tmux': 'Tmux会话管理',
+                                'feishu-doc': '飞书文档',
+                                'feishu-drive': '飞书云盘',
+                                'feishu-wiki': '飞书知识库',
+                                'feishu-perm': '飞书权限管理',
+                                'healthcheck': '健康检查',
+                                'node-connect': '节点连接',
+                              }
+                              const chineseName = nameMap[skill.directory] || nameMap[skill.name] || skill.name
+                              const shortDesc = getShortDescription(skill.description)
+                              
+                              return (
+                                <div
+                                  key={i}
+                                  onClick={() => setSelectedSkill({ name: chineseName, description: skill.description || '暂无描述', directory: skill.directory, sourceAgentId: agentData.agentId, sourceAgentName: agentData.agentName })}
+                                  className="bg-gray-800/50 rounded-lg border border-gray-700 p-3 hover:border-blue-500/50 cursor-pointer transition-colors group"
+                                >
+                                  <div className="flex items-start gap-2 mb-2">
+                                    <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-green-500/20 text-green-400 flex-shrink-0">
+                                      <Sparkles className="w-4 h-4" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <h4 className="text-white text-sm font-medium group-hover:text-blue-400 transition-colors truncate">{chineseName}</h4>
+                                      <p className="text-xs text-gray-500 truncate">{skill.directory || skill.name}</p>
+                                    </div>
+                                  </div>
+                                  <p className="text-xs text-gray-400 line-clamp-2">{shortDesc}</p>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {skillsTab === 'search' && (
+                <div>
+                  {/* Search box */}
+                  <div className="flex gap-2 mb-6">
+                    <input
+                      type="text"
+                      value={clawhubQuery}
+                      onChange={e => setClawhubQuery(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleSearchClawhub()}
+                      placeholder="搜索 ClawHub 技能..."
+                      className="linear-input flex-1"
+                    />
+                    <button
+                      onClick={handleSearchClawhub}
+                      disabled={isSearching || !clawhubQuery.trim()}
+                      className="linear-btn-primary disabled:opacity-50"
+                    >
+                      {isSearching ? '搜索中...' : '搜索'}
+                    </button>
                   </div>
-                ))}
-              </div>
+
+                  {/* Search results */}
+                  {clawhubResults.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                      {clawhubResults.map((result: any, i: number) => (
+                        <div key={i} className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                          <div className="flex items-center gap-3 mb-2">
+                            <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-500/20 text-blue-400">
+                              <Sparkles className="w-5 h-5" />
+                            </div>
+                            <div className="flex-1">
+                              <h4 className="text-white font-medium text-sm">{result.name}</h4>
+                            </div>
+                          </div>
+                          <p className="text-sm text-gray-400 line-clamp-2 mb-3">{result.description || '无描述'}</p>
+                          <button
+                            onClick={() => handleInstallSkill(result.name)}
+                            disabled={isInstalling}
+                            className="w-full px-3 py-1.5 text-sm bg-green-500/20 text-green-400 hover:bg-green-500/30 rounded-lg transition-colors disabled:opacity-50"
+                          >
+                            {isInstalling ? '安装中...' : '安装到所有 Agent'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : clawhubQuery && !isSearching ? (
+                    <div className="text-center py-12 text-gray-500">
+                      <p>未找到相关技能</p>
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 text-gray-500">
+                      <Sparkles className="w-12 h-12 mx-auto mb-4 text-gray-600" />
+                      <p>输入关键词搜索 ClawHub 技能</p>
+                      <p className="text-sm mt-2">例如: weather, github, database, slack...</p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -2433,7 +2781,7 @@ ${agentsForm.tools || '无'}`
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-800">
-                      {logs.map((log, i) => (
+                      {[...logs].reverse().map((log, i) => (
                         <tr key={i} className="hover:bg-gray-800/50">
                           <td className="px-4 py-2 text-gray-400 font-mono text-xs whitespace-nowrap">
                             {new Date(log.time).toLocaleTimeString('zh-CN')}
@@ -2691,6 +3039,14 @@ ${agentsForm.tools || '无'}`
         messages={conversationMessages}
         projects={projects}
         onAssign={handleAssignProject}
+      />
+      <SkillDetailModal 
+        skill={selectedSkill} 
+        agents={agents}
+        installedSkillsByAgent={installedSkillsByAgent}
+        onClose={() => { setSelectedSkill(null); setCopyTargetAgents([]) }} 
+        onCopySuccess={fetchInstalledSkills}
+        onDeleteSuccess={fetchInstalledSkills}
       />
       
       {/* Session Detail Modal */}

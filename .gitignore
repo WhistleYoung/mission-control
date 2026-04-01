@@ -30,3 +30,9 @@ logs/
 
 # Healthcheck logs
 healthcheck.log
+
+# SQLite database
+*.db
+*.sqlite
+*.sqlite3
+data/

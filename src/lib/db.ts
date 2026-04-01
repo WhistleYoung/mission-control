@@ -1,15 +1,144 @@
-import mysql from 'mysql2/promise'
+import Database from 'better-sqlite3'
+import path from 'path'
+import fs from 'fs'
+import bcrypt from 'bcryptjs'
 
-const pool = mysql.createPool({
-  host: process.env.MYSQL_HOST || 'op.bullrom.cn',
-  port: parseInt(process.env.MYSQL_PORT || '3306'),
-  user: process.env.MYSQL_USER || 'root',
-  password: process.env.MYSQL_PASSWORD || 'My*19940903',
-  database: process.env.MYSQL_DATABASE || 'mission_control',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-})
+// Database file path
+const DATA_DIR = path.join(process.cwd(), 'data')
+const DB_PATH = path.join(DATA_DIR, 'mission-control.db')
+
+// Ensure data directory exists
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true })
+}
+
+// Initialize database
+const db = new Database(DB_PATH)
+
+// Enable foreign keys
+db.pragma('journal_mode = WAL')
+db.pragma('foreign_keys = ON')
+
+// Initialize tables
+function initializeDatabase() {
+  db.exec(`
+    -- Users table
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      display_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Tasks table
+    CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT DEFAULT 'backlog',
+      priority TEXT DEFAULT 'medium',
+      assignee_type TEXT DEFAULT 'ai',
+      assignee_id TEXT,
+      assignee_name TEXT,
+      due_date TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Projects table
+    CREATE TABLE IF NOT EXISTS projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      emoji TEXT DEFAULT '📁',
+      agent_id TEXT,
+      agent_name TEXT,
+      progress INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Project history table
+    CREATE TABLE IF NOT EXISTS project_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      description TEXT,
+      actor_type TEXT DEFAULT 'system',
+      actor_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    -- Conversations table
+    CREATE TABLE IF NOT EXISTS conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER,
+      agent_id TEXT,
+      title TEXT,
+      summary TEXT,
+      message_count INTEGER DEFAULT 0,
+      session_id TEXT,
+      custom_tags TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+    );
+  `)
+
+  // Create default admin user if not exists
+  const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get('admin')
+  if (!existingUser) {
+    const passwordHash = bcrypt.hashSync('admin123', 10)
+    db.prepare('INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)').run(
+      'admin',
+      passwordHash,
+      '管理员'
+    )
+  }
+}
+
+initializeDatabase()
+
+// Wrapper to match mysql2/promise interface: [rows, fields]
+function query<T>(sql: string, params: any[] = []): [T[], any] {
+  const stmt = db.prepare(sql)
+  if (sql.trim().toUpperCase().startsWith('SELECT')) {
+    const rows = stmt.all(...params) as T[]
+    return [rows, undefined as any]
+  } else {
+    const result = stmt.run(...params)
+    return [undefined as any, { insertId: result.lastInsertRowid, affectedRows: result.changes }]
+  }
+}
+
+// SQL builders for common operations
+export const sql = {
+  // Insert helper - returns insertId
+  insert(table: string, data: Record<string, any>): number {
+    const keys = Object.keys(data)
+    const values = Object.values(data)
+    const placeholders = keys.map(() => '?').join(', ')
+    const result = db.prepare(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`).run(...values)
+    return result.lastInsertRowid as number
+  },
+
+  // Update helper - returns affected rows
+  update(table: string, data: Record<string, any>, where: string, whereParams: any[]): number {
+    const keys = Object.keys(data)
+    const values = Object.values(data)
+    const setClause = keys.map(k => `${k} = ?`).join(', ')
+    const result = db.prepare(`UPDATE ${table} SET ${setClause} WHERE ${where}`).run(...values, ...whereParams)
+    return result.changes
+  },
+
+  // Delete helper
+  delete(table: string, where: string, whereParams: any[]): number {
+    const result = db.prepare(`DELETE FROM ${table} WHERE ${where}`).run(...whereParams)
+    return result.changes
+  }
+}
 
 export interface User {
   id: number
@@ -19,14 +148,24 @@ export interface User {
   created_at: Date
 }
 
+// Re-export pool as db for compatibility with existing code
+export const pool = {
+  query,
+  // For direct statement execution when needed
+  exec(sql: string) {
+    return db.exec(sql)
+  },
+  prepare(sql: string) {
+    return db.prepare(sql)
+  }
+}
+
 export async function findUserByUsername(username: string): Promise<User | null> {
-  const [rows] = await pool.query('SELECT * FROM users WHERE username = ?', [username])
-  const users = rows as User[]
-  return users.length > 0 ? users[0] : null
+  const [rows] = query<User>('SELECT * FROM users WHERE username = ?', [username])
+  return rows.length > 0 ? rows[0] : null
 }
 
 export async function verifyPassword(inputPassword: string, storedHash: string): Promise<boolean> {
-  const bcrypt = require('bcryptjs')
   return bcrypt.compare(inputPassword, storedHash)
 }
 
@@ -40,4 +179,4 @@ export async function validateCredentials(username: string, password: string): P
   return user
 }
 
-export { pool }
+export { db }

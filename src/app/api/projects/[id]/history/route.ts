@@ -3,22 +3,7 @@ import { pool } from '@/lib/db'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import type { NextRequest } from 'next/server'
 
-// Ensure project_history table exists
-async function ensureTable() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS project_history (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      project_id INT NOT NULL,
-      action VARCHAR(50) NOT NULL,
-      description TEXT,
-      actor_type ENUM('human', 'ai', 'system') DEFAULT 'system',
-      actor_name VARCHAR(100),
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_project_id (project_id),
-      INDEX idx_created_at (created_at)
-    )
-  `)
-}
+// Table is auto-created in db.ts on startup, no need to ensure here
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = verifyAuth(request)
@@ -70,8 +55,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (projectList.length === 0) {
       return NextResponse.json({ error: '项目不存在' }, { status: 404 })
     }
-
-    await ensureTable()
 
     const body = await request.json()
     const { action, description, actor_type, actor_name } = body
