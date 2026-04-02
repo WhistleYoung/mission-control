@@ -1,28 +1,13 @@
 import { NextResponse } from 'next/server'
 import { rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from 'fs'
 import { join } from 'path'
-import { exec } from 'child_process'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
+import { restartGateway } from '@/lib/gateway'
 import type { NextRequest } from 'next/server'
 
 const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
 const LOCAL_CONFIG = '/home/bullrom/mission-control/data/agent-configs.json'
 const TEMPLATE_WORKSPACE = '/home/bullrom/.openclaw/workspace'
-
-// Restart OpenClaw Gateway to reload config (delayed, non-blocking)
-function restartGateway() {
-  // Delay restart by 2 seconds to ensure API response is sent first
-  setTimeout(() => {
-    const openclawCmd = process.env.OPENCLAW_PATH || '/home/bullrom/.npm-global/bin/openclaw'
-    exec(`${openclawCmd} gateway restart`, (error) => {
-      if (error) {
-        console.error('Failed to restart OpenClaw Gateway:', error)
-        return
-      }
-      console.log('OpenClaw Gateway restart completed')
-    })
-  }, 2000)
-}
 
 function getAgentIdentityName(agentId: string, agentName?: string): string {
   // Use hardcoded Chinese names for known agents
@@ -179,12 +164,16 @@ export async function GET(request: NextRequest) {
       user = parseUserFile(agent.workspace)
     }
     
+    // Model priority: openclaw.json > LOCAL_CONFIG > unknown
+    // This ensures manual edits to openclaw.json take effect
+    const model = agent.model || localModel || 'unknown'
+    
     return {
       id: agent.id,
       name: agent.name,
       identityName: getAgentIdentityName(agent.id, agent.name),
       identityEmoji: getAgentIdentityEmoji(agent.id, agent.workspace),
-      model: localModel || agent.model || 'unknown',
+      model,
       workspace: agent.workspace,
       isDefault: agent.id === 'main',
       boundChannel,
@@ -228,14 +217,8 @@ export async function POST(request: NextRequest) {
     const workspacePath = `/home/bullrom/.openclaw/workspace-${id}`
     try {
       mkdirSync(workspacePath, { recursive: true })
-      const dirsToCopy = ['memory']
-      for (const dir of dirsToCopy) {
-        const srcDir = join(TEMPLATE_WORKSPACE, dir)
-        const destDir = join(workspacePath, dir)
-        if (existsSync(srcDir)) {
-          cpSync(srcDir, destDir, { recursive: true })
-        }
-      }
+      // Create empty memory directory for new agent (memory is agent-specific, not copied)
+      mkdirSync(join(workspacePath, 'memory'), { recursive: true })
       const basicFiles = ['AGENTS.md', 'IDENTITY.md', 'SOUL.md', 'TOOLS.md', 'HEARTBEAT.md']
       for (const file of basicFiles) {
         const srcFile = join(TEMPLATE_WORKSPACE, file)

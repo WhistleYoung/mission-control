@@ -6,6 +6,7 @@ import { execSync } from 'child_process'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
+import { restartGateway } from '@/lib/gateway'
 
 // Ensure settings table exists - SQLite compatible version
 function ensureSettingsTable() {
@@ -160,14 +161,9 @@ export async function POST(request: NextRequest) {
     const { action } = body
 
     if (action === 'restartGateway') {
-      // Restart OpenClaw Gateway
-      try {
-        execSync('setsid openclaw gateway restart > /dev/null 2>&1 &', { timeout: 5000 })
-        return NextResponse.json({ success: true, message: '网关重启命令已发送' })
-      } catch (error: any) {
-        console.error('Gateway restart failed:', error.stderr || error.message)
-        return NextResponse.json({ error: '网关重启失败', details: error.stderr || error.message }, { status: 500 })
-      }
+      // Restart OpenClaw Gateway via WebSocket
+      restartGateway()
+      return NextResponse.json({ success: true, message: '网关重启命令已发送' })
     }
 
     return NextResponse.json({ error: '未知操作' }, { status: 400 })

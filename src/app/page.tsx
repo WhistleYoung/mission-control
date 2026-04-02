@@ -7,10 +7,10 @@ import {
   MoreHorizontal, ChevronDown, Clock, User, Bot, X, Check, RefreshCw,
   Activity, Terminal, ChevronLeft, ChevronRight, Sparkles, LogOut, Trash2,
   Network, Zap, ExternalLink, FileText, Filter, RefreshCw as RefreshCwIcon,
-  Key,
+  Key, FolderTree, Grid, Cpu, Edit2,
 } from 'lucide-react'
 
-type Tab = 'inbox' | 'calendar' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs'
+type Tab = 'inbox' | 'calendar' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs' | 'models'
 type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'in-review' | 'done'
 type Priority = 'urgent' | 'high' | 'medium' | 'low'
 type MemoryFilter = 'daily' | 'long-term' | 'all'
@@ -593,6 +593,253 @@ const CreateCronModal = ({ isOpen, onClose, onCreate, agents }: {
   )
 }
 
+// Add Model Modal - OpenAI compatible format
+function AddModelModal({ isOpen, onClose, onAdd, providers = {} }: {
+  isOpen: boolean
+  onClose: () => void
+  onAdd: (providerId: string, provider: any, models: any[]) => void
+  providers?: Record<string, any>
+}) {
+  const [mode, setMode] = useState<'new' | 'existing'>('new')
+  const [selectedProvider, setSelectedProvider] = useState('')
+  const [providerId, setProviderId] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [apiType, setApiType] = useState<'openai-completions' | 'anthropic'>('openai-completions')
+  const [modelsInput, setModelsInput] = useState('')
+  const [contextWindow, setContextWindow] = useState('128000')
+  const [maxTokens, setMaxTokens] = useState('8192')
+  const [reasoning, setReasoning] = useState(false)
+
+  // Presets for common providers
+  const providerPresets = [
+    { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: '', apiType: 'openai-completions' as const },
+    { name: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', apiKey: '', apiType: 'anthropic' as const },
+    { name: '兼容 OpenAI', baseUrl: '', apiKey: '', apiType: 'openai-completions' as const },
+    { name: 'Ollama', baseUrl: 'http://localhost:11434/v1', apiKey: 'ollama', apiType: 'openai-completions' as const },
+    { name: 'LM Studio', baseUrl: 'http://localhost:1234/v1', apiKey: 'lm-studio', apiType: 'openai-completions' as const },
+    { name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', apiKey: '', apiType: 'openai-completions' as const },
+    { name: 'Together', baseUrl: 'https://api.together.xyz/v1', apiKey: '', apiType: 'openai-completions' as const },
+  ]
+
+  const existingProviders = Object.keys(providers)
+
+  const applyPreset = (preset: any) => {
+    setBaseUrl(preset.baseUrl)
+    setApiKey(preset.apiKey)
+    setApiType(preset.apiType)
+    if (!providerId && preset.baseUrl) {
+      try {
+        const url = new URL(preset.baseUrl)
+        setProviderId(url.host.replace(/\./g, '-'))
+      } catch {}
+    }
+  }
+
+  const handleSubmit = () => {
+    // Parse models input (format: "modelId:显示名称" or just "modelId")
+    const models: any[] = []
+    const lines = modelsInput.trim().split('\n').filter(l => l.trim())
+    
+    if (lines.length === 0) {
+      alert('请至少添加一个模型')
+      return
+    }
+
+    for (const line of lines) {
+      const [id, ...nameParts] = line.split(':')
+      const modelId = id.trim()
+      const modelName = nameParts.join(':').trim() || modelId
+      if (modelId) {
+        models.push({
+          id: modelId,
+          name: modelName,
+          reasoning,
+          input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: parseInt(contextWindow) || 128000,
+          maxTokens: parseInt(maxTokens) || 8192,
+        })
+      }
+    }
+
+    if (models.length === 0) {
+      alert('请至少添加一个模型')
+      return
+    }
+
+    const finalProviderId = mode === 'existing' ? selectedProvider : providerId.trim()
+    if (!finalProviderId) {
+      alert('请选择或输入 Provider ID')
+      return
+    }
+
+    if (mode === 'new' && !baseUrl.trim()) {
+      alert('请输入 Base URL')
+      return
+    }
+
+    const provider = mode === 'existing' 
+      ? providers[selectedProvider]
+      : {
+          baseUrl: baseUrl.trim(),
+          apiKey: apiKey.trim(),
+          api: apiType,
+        }
+
+    onAdd(finalProviderId, provider, models)
+    handleClose()
+  }
+
+  const handleClose = () => {
+    setMode('new')
+    setSelectedProvider('')
+    setProviderId('')
+    setBaseUrl('')
+    setApiKey('')
+    setApiType('openai-completions')
+    setModelsInput('')
+    setContextWindow('128000')
+    setMaxTokens('8192')
+    setReasoning(false)
+    onClose()
+  }
+
+  if (!isOpen) return null
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleClose}>
+      <div className="bg-gray-850 border border-gray-700 rounded-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-semibold text-white">新增模型</h3>
+          <button onClick={handleClose} className="p-1 hover:bg-gray-700 rounded"><X className="w-5 h-5 text-gray-500" /></button>
+        </div>
+        
+        <div className="space-y-4">
+          {/* Mode selection: new provider or existing */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-1.5">添加到</label>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => setMode('new')} 
+                className={`flex-1 py-2 px-3 rounded-lg text-sm border ${mode === 'new' ? 'border-blue-500 bg-blue-500/20 text-blue-400' : 'border-gray-700 bg-gray-800 text-gray-400'}`}>
+                新建厂商
+              </button>
+              <button 
+                onClick={() => setMode('existing')} 
+                className={`flex-1 py-2 px-3 rounded-lg text-sm border ${mode === 'existing' ? 'border-blue-500 bg-blue-500/20 text-blue-400' : 'border-gray-700 bg-gray-800 text-gray-400'}`}
+                disabled={existingProviders.length === 0}>
+                已有厂商 {existingProviders.length > 0 && `(${existingProviders.length})`}
+              </button>
+            </div>
+          </div>
+
+          {/* Existing provider selection */}
+          {mode === 'existing' ? (
+            <div>
+              <label className="block text-sm text-gray-400 mb-1.5">选择厂商</label>
+              <select 
+                value={selectedProvider} 
+                onChange={e => setSelectedProvider(e.target.value)}
+                className="linear-input w-full">
+                <option value="">-- 选择已有厂商 --</option>
+                {existingProviders.map(p => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <>
+              {/* Provider Presets */}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1.5">快速配置</label>
+                <div className="flex flex-wrap gap-2">
+                  {providerPresets.map(preset => (
+                    <button key={preset.name} onClick={() => applyPreset(preset)} className="px-3 py-1.5 text-xs bg-gray-800 text-gray-300 rounded-lg border border-gray-700 hover:border-blue-500">
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Provider ID */}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1.5">厂商 ID</label>
+                <input type="text" value={providerId} onChange={e => setProviderId(e.target.value)} className="linear-input w-full" placeholder="如: openai, groq, my-provider" />
+              </div>
+              
+              {/* Base URL */}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1.5">Base URL</label>
+                <input type="text" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} className="linear-input w-full" placeholder="https://api.openai.com/v1" />
+              </div>
+              
+              {/* API Type */}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1.5">接口协议</label>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => setApiType('openai-completions')} 
+                    className={`flex-1 py-2 px-3 rounded-lg text-sm border ${apiType === 'openai-completions' ? 'border-blue-500 bg-blue-500/20 text-blue-400' : 'border-gray-700 bg-gray-800 text-gray-400'}`}>
+                    OpenAI 兼容
+                  </button>
+                  <button 
+                    onClick={() => setApiType('anthropic')} 
+                    className={`flex-1 py-2 px-3 rounded-lg text-sm border ${apiType === 'anthropic' ? 'border-purple-500 bg-purple-500/20 text-purple-400' : 'border-gray-700 bg-gray-800 text-gray-400'}`}>
+                    Anthropic
+                  </button>
+                </div>
+              </div>
+              
+              {/* API Key */}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1.5">API Key</label>
+                <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="linear-input w-full" placeholder="sk-... 或 anthropic-key" />
+              </div>
+            </>
+          )}
+          
+          {/* Models Input */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-1.5">模型列表</label>
+            <textarea 
+              value={modelsInput} 
+              onChange={e => setModelsInput(e.target.value)} 
+              className="linear-input w-full h-32 resize-none font-mono text-sm" 
+              placeholder={'格式: 模型ID:显示名称\n例如:\ngpt-4o:GPT-4o\ngpt-4o-mini:GPT-4o Mini\nclaude-sonnet-3-5:Claude 3.5 Sonnet'} />
+            <p className="text-xs text-gray-500 mt-1">每行一个模型，格式: ID:显示名称（显示名称可省略）</p>
+          </div>
+          
+          {/* Context Window */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm text-gray-400 mb-1.5">上下文窗口</label>
+              <input type="number" value={contextWindow} onChange={e => setContextWindow(e.target.value)} className="linear-input w-full" placeholder="128000" />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-400 mb-1.5">最大输出</label>
+              <input type="number" value={maxTokens} onChange={e => setMaxTokens(e.target.value)} className="linear-input w-full" placeholder="8192" />
+            </div>
+          </div>
+          
+          {/* Reasoning */}
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={reasoning} onChange={e => setReasoning(e.target.checked)} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-500" />
+              <span className="text-sm text-gray-300">支持推理模型（如 o1, o3, 思考模型）</span>
+            </label>
+          </div>
+        </div>
+        
+        <div className="flex justify-end gap-3 mt-6">
+          <button onClick={handleClose} className="linear-btn-secondary">取消</button>
+          <button onClick={handleSubmit} className="linear-btn-primary">添加模型</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const ConversationDetailModal = ({ isOpen, onClose, conversation, messages, projects, onAssign }: {
   isOpen: boolean
   onClose: () => void
@@ -690,6 +937,79 @@ function getShortDescription(description: string): string {
   if (!description) return '暂无描述'
   if (description.length <= 60) return description
   return description.substring(0, 60) + '...'
+}
+
+// Edit Model Modal
+function EditModelModal({ isOpen, onClose, onUpdate, providerId, model }: {
+  isOpen: boolean
+  onClose: () => void
+  onUpdate: (providerId: string, modelId: string, data: any) => void
+  providerId: string
+  model: any
+}) {
+  const [contextWindow, setContextWindow] = useState(String(model?.contextWindow || 128000))
+  const [maxTokens, setMaxTokens] = useState(String(model?.maxTokens || 8192))
+  const [inputText, setInputText] = useState(model?.input?.includes('text') || false)
+  const [inputImage, setInputImage] = useState(model?.input?.includes('image') || false)
+  const [reasoning, setReasoning] = useState(model?.reasoning || false)
+
+  if (!isOpen) return null
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-gray-850 border border-gray-700 rounded-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-semibold text-white">编辑模型参数</h3>
+          <button onClick={onClose} className="p-1 hover:bg-gray-700 rounded"><X className="w-5 h-5 text-gray-500" /></button>
+        </div>
+        
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm text-gray-400 mb-1.5">上下文窗口（tokens）</label>
+            <input type="number" value={contextWindow} onChange={e => setContextWindow(e.target.value)} className="linear-input w-full" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1.5">最大输出（tokens）</label>
+            <input type="number" value={maxTokens} onChange={e => setMaxTokens(e.target.value)} className="linear-input w-full" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1.5">输入类型</label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={inputText} onChange={e => setInputText(e.target.checked)} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-500" />
+                <span className="text-sm text-gray-300">文本</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={inputImage} onChange={e => setInputImage(e.target.checked)} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-500" />
+                <span className="text-sm text-gray-300">图片</span>
+              </label>
+            </div>
+          </div>
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={reasoning} onChange={e => setReasoning(e.target.checked)} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-500" />
+              <span className="text-sm text-gray-300">推理模型</span>
+            </label>
+          </div>
+        </div>
+        
+        <div className="flex justify-end gap-3 mt-6">
+          <button onClick={onClose} className="linear-btn-secondary">取消</button>
+          <button onClick={() => {
+            const input: string[] = []
+            if (inputText) input.push('text')
+            if (inputImage) input.push('image')
+            onUpdate(providerId, model.id, {
+              contextWindow: parseInt(contextWindow) || 128000,
+              maxTokens: parseInt(maxTokens) || 8192,
+              input,
+              reasoning,
+            })
+          }} className="linear-btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // Skill Detail Modal
@@ -1129,6 +1449,206 @@ const AgentCard = ({ agent, onModelChange, onDelete, channels, onChannelChange, 
   )
 }
 
+// Agent Groups View Component
+function AgentGroupsView({ 
+  agents, 
+  groups, 
+  channels,
+  onCreateGroup,
+  onUpdateGroup,
+  onDeleteGroup,
+  onModelChange,
+  onDeleteAgent,
+  onChannelChange,
+  onEditSoul,
+  onEditInfo
+}: { 
+  agents: Agent[]
+  groups: {id: number; name: string; emoji: string; color: string; sortOrder: number; agentIds: string[]}[]
+  channels: Channel[]
+  onCreateGroup: (data: { name: string; emoji: string; color: string; agentIds: string[] }) => void
+  onUpdateGroup: (data: { id: number; name: string; emoji: string; color: string; agentIds: string[] }) => void
+  onDeleteGroup: (id: number) => void
+  onModelChange: (agentId: string, newModel: string) => void
+  onDeleteAgent: (agentId: string) => void
+  onChannelChange: (agentId: string, newChannel: string) => void
+  onEditSoul: (agent: Agent) => void
+  onEditInfo: (agent: Agent) => void
+}) {
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [editingGroup, setEditingGroup] = useState<typeof groups[0] | null>(null)
+  const [groupName, setGroupName] = useState('')
+  const [groupEmoji, setGroupEmoji] = useState('📁')
+  const [groupColor, setGroupColor] = useState('#6366f1')
+  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
+  const emojis = ['📁', '🚀', '⚙️', '💬', '🔄', '📚', '🎯', '💡', '📊', '🎨', '🔧', '📱', '🤖', '👥', '⭐', '🔥']
+  const colors = ['#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#06b6d4', '#3b82f6']
+
+  // Get ungrouped agents (agents not in any group)
+  const groupedAgentIds = groups.flatMap(g => g.agentIds)
+  const ungroupedAgents = agents.filter(a => !groupedAgentIds.includes(a.id))
+
+  const openCreateModal = () => {
+    setEditingGroup(null)
+    setGroupName('')
+    setGroupEmoji('📁')
+    setGroupColor('#6366f1')
+    setSelectedAgentIds([])
+    setShowCreateModal(true)
+  }
+
+  const openEditModal = (group: typeof groups[0]) => {
+    setEditingGroup(group)
+    setGroupName(group.name)
+    setGroupEmoji(group.emoji)
+    setGroupColor(group.color)
+    setSelectedAgentIds(group.agentIds)
+    setShowCreateModal(true)
+  }
+
+  const handleSave = () => {
+    if (!groupName.trim()) return
+    if (editingGroup) {
+      onUpdateGroup({ id: editingGroup.id, name: groupName, emoji: groupEmoji, color: groupColor, agentIds: selectedAgentIds })
+    } else {
+      onCreateGroup({ name: groupName, emoji: groupEmoji, color: groupColor, agentIds: selectedAgentIds })
+    }
+    setShowCreateModal(false)
+  }
+
+  const toggleAgent = (agentId: string) => {
+    setSelectedAgentIds(prev => 
+      prev.includes(agentId) ? prev.filter(id => id !== agentId) : [...prev, agentId]
+    )
+  }
+
+  return (
+    <div className="p-4 md:p-6">
+      {/* Header with create button */}
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-3">
+          <FolderTree className="w-5 h-5 text-blue-400" />
+          <h2 className="text-lg font-semibold text-white">员工分组</h2>
+          <span className="text-sm text-gray-500">({groups.length} 个分组, {ungroupedAgents.length} 个未分组)</span>
+        </div>
+        <button onClick={openCreateModal} className="linear-btn-primary flex items-center gap-2">
+          <Plus className="w-4 h-4" />新建分组
+        </button>
+      </div>
+
+      {/* Groups */}
+      <div className="space-y-6">
+        {groups.map(group => {
+          const groupAgents = agents.filter(a => group.agentIds.includes(a.id))
+          return (
+            <div key={group.id} className="bg-gray-900/30 rounded-xl border border-gray-800 p-4">
+              {/* Group Header */}
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg flex items-center justify-center text-xl" style={{ backgroundColor: group.color + '20', border: `1px solid ${group.color}40` }}>
+                    {group.emoji}
+                  </div>
+                  <div>
+                    <h3 className="text-white font-medium">{group.name}</h3>
+                    <p className="text-xs text-gray-500">{groupAgents.length} 个员工</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => openEditModal(group)} className="p-2 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-white">
+                    <Edit3 className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => onDeleteGroup(group.id)} className="p-2 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-red-400">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              {/* Group Agents Grid */}
+              {groupAgents.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {groupAgents.map(agent => (
+                    <AgentCard key={agent.id} agent={agent} onModelChange={onModelChange} onDelete={onDeleteAgent} channels={channels} onChannelChange={onChannelChange} onEditSoul={onEditSoul} onEditInfo={onEditInfo} />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500 italic">分组中暂无员工</p>
+              )}
+            </div>
+          )
+        })}
+
+        {/* Ungrouped Agents */}
+        {ungroupedAgents.length > 0 && (
+          <div className="bg-gray-900/30 rounded-xl border border-gray-800 border-dashed p-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-gray-700/50 text-xl">
+                ❓
+              </div>
+              <div>
+                <h3 className="text-white font-medium">未分组</h3>
+                <p className="text-xs text-gray-500">{ungroupedAgents.length} 个员工</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {ungroupedAgents.map(agent => (
+                <AgentCard key={agent.id} agent={agent} onModelChange={onModelChange} onDelete={onDeleteAgent} channels={channels} onChannelChange={onChannelChange} onEditSoul={onEditSoul} onEditInfo={onEditInfo} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Create/Edit Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCreateModal(false)}>
+          <div className="bg-gray-850 border border-gray-700 rounded-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-semibold text-white">{editingGroup ? '编辑分组' : '新建分组'}</h3>
+              <button onClick={() => setShowCreateModal(false)} className="p-1 hover:bg-gray-700 rounded"><X className="w-5 h-5 text-gray-500" /></button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1.5">分组名称</label>
+                <input type="text" value={groupName} onChange={e => setGroupName(e.target.value)} className="linear-input w-full" placeholder="输入分组名称..." />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1.5">图标</label>
+                <div className="flex flex-wrap gap-2">
+                  {emojis.map(e => (
+                    <button key={e} onClick={() => setGroupEmoji(e)} className={`w-10 h-10 text-xl rounded-lg border ${groupEmoji === e ? 'border-blue-500 bg-blue-500/20' : 'border-gray-700 bg-gray-800'}`}>{e}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1.5">颜色</label>
+                <div className="flex flex-wrap gap-2">
+                  {colors.map(c => (
+                    <button key={c} onClick={() => setGroupColor(c)} className={`w-8 h-8 rounded-lg ${groupColor === c ? 'ring-2 ring-white ring-offset-2 ring-offset-gray-850' : ''}`} style={{ backgroundColor: c }} />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1.5">成员 ({selectedAgentIds.length} 个已选)</label>
+                <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                  {agents.map(agent => (
+                    <button key={agent.id} onClick={() => toggleAgent(agent.id)} className={`flex items-center gap-2 p-2 rounded-lg border text-left ${selectedAgentIds.includes(agent.id) ? 'border-blue-500 bg-blue-500/10' : 'border-gray-700 bg-gray-800'}`}>
+                      <span>{agent.identityEmoji}</span>
+                      <span className="text-sm text-white truncate">{agent.identityName}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button onClick={() => setShowCreateModal(false)} className="linear-btn-secondary">取消</button>
+              <button onClick={handleSave} className="linear-btn-primary">保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function getChannelDisplayName(channelType: string): string {
   const names: Record<string, string> = {
     feishu: '飞书',
@@ -1157,6 +1677,7 @@ export default function MissionControl() {
   const [projects, setProjects] = useState<Project[]>([])
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
+  const [agentGroups, setAgentGroups] = useState<{id: number; name: string; emoji: string; color: string; sortOrder: number; agentIds: string[]}[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
   const [installedSkillsByAgent, setInstalledSkillsByAgent] = useState<{agentId: string; agentName: string; skills: any[]}[]>([])
   const [clawhubQuery, setClawhubQuery] = useState('')
@@ -1164,6 +1685,10 @@ export default function MissionControl() {
   const [isSearching, setIsSearching] = useState(false)
   const [isInstalling, setIsInstalling] = useState(false)
   const [skillsTab, setSkillsTab] = useState<'installed' | 'search'>('installed')
+  const [modelsConfig, setModelsConfig] = useState<{mode: string; models: any[]; providers: any}>({ mode: 'merge', models: [], providers: {} })
+  const [showAddModelModal, setShowAddModelModal] = useState(false)
+  const [showEditModelModal, setShowEditModelModal] = useState(false)
+  const [editingModel, setEditingModel] = useState<{providerId: string, model: any} | null>(null)
   const [selectedSkill, setSelectedSkill] = useState<{name: string; description: string; directory: string; sourceAgentId: string; sourceAgentName: string} | null>(null)
   const [copyTargetAgents, setCopyTargetAgents] = useState<string[]>([])
   const [isCopying, setIsCopying] = useState(false)
@@ -1202,6 +1727,7 @@ export default function MissionControl() {
   const [showConversationDetail, setShowConversationDetail] = useState(false)
   const [conversationMessages, setConversationMessages] = useState<any[]>([])
   const [realtimeSessions, setRealtimeSessions] = useState<any[]>([])
+  const [realtimeTasks, setRealtimeTasks] = useState<any[]>([])
   const [selectedSession, setSelectedSession] = useState<any | null>(null)
   const [sessionMessages, setSessionMessages] = useState<any[]>([])
   const [logs, setLogs] = useState<any[]>([])
@@ -1462,6 +1988,18 @@ export default function MissionControl() {
       if (agentsRes?.agents) setAgents(agentsRes.agents)
       if (agentsRes?.skills) setSkills(agentsRes.skills)
       
+      // Fetch agent groups
+      try {
+        const groupsRes = await fetchWithRetry('/api/agent-groups')
+        if (Array.isArray(groupsRes)) setAgentGroups(groupsRes)
+      } catch (e) { console.error('Failed to fetch agent groups:', e) }
+      
+      // Fetch models config
+      try {
+        const modelsRes = await fetchWithRetry('/api/models-config')
+        if (modelsRes?.models) setModelsConfig(modelsRes)
+      } catch (e) { console.error('Failed to fetch models config:', e) }
+      
       if (eventsRes?.custom || eventsRes?.cron) {
         const custom = eventsRes.custom || []
         const cron = eventsRes.cron || []
@@ -1483,6 +2021,12 @@ export default function MissionControl() {
           const sessionsRes = await fetchWithRetry('/api/sessions')
           if (Array.isArray(sessionsRes)) setRealtimeSessions(sessionsRes)
         } catch (e) { console.log('Failed to fetch realtime sessions', e) }
+        
+        // Fetch realtime tasks from Gateway
+        try {
+          const tasksRes = await fetchWithRetry('/api/realtime-tasks')
+          if (tasksRes?.tasks) setRealtimeTasks(tasksRes.tasks)
+        } catch (e) { console.log('Failed to fetch realtime tasks', e) }
 
       setApiStatus('connected')
     } catch (error) {
@@ -1664,6 +2208,142 @@ export default function MissionControl() {
       setAgents(agents.filter(a => a.id !== agentId))
     } catch (error) {
       console.error('Failed to delete agent:', error)
+    }
+  }
+
+  // Agent Group handlers
+  const handleCreateAgentGroup = async (groupData: { name: string; emoji: string; color: string; agentIds: string[] }) => {
+    try {
+      const res = await fetch('/api/agent-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(groupData),
+      })
+      if (res.ok) {
+        const newGroup = await res.json()
+        setAgentGroups([...agentGroups, newGroup])
+      }
+    } catch (error) {
+      console.error('Failed to create agent group:', error)
+    }
+  }
+
+  const handleUpdateAgentGroup = async (groupData: { id: number; name: string; emoji: string; color: string; agentIds: string[] }) => {
+    try {
+      const res = await fetch('/api/agent-groups', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(groupData),
+      })
+      if (res.ok) {
+        const updatedGroup = await res.json()
+        setAgentGroups(agentGroups.map(g => g.id === groupData.id ? updatedGroup : g))
+      }
+    } catch (error) {
+      console.error('Failed to update agent group:', error)
+    }
+  }
+
+  const handleDeleteAgentGroup = async (groupId: number) => {
+    if (!confirm('确定删除此分组？')) return
+    try {
+      await fetch(`/api/agent-groups?id=${groupId}`, { method: 'DELETE' })
+      setAgentGroups(agentGroups.filter(g => g.id !== groupId))
+    } catch (error) {
+      console.error('Failed to delete agent group:', error)
+    }
+  }
+
+  // Model handlers
+  const handleDeleteModel = async (providerId: string, modelId: string) => {
+    try {
+      const res = await fetch(`/api/models-config?providerId=${providerId}&modelId=${modelId}`, { method: 'DELETE' })
+      if (res.ok) {
+        // Refresh models config
+        const modelsRes = await fetch('/api/models-config')
+        if (modelsRes.ok) setModelsConfig(await modelsRes.json())
+      } else {
+        const data = await res.json()
+        if (data.boundAgents) {
+          const agentList = data.boundAgents.join(', ')
+          alert(`无法删除：模型被以下 agent 绑定\n\n${agentList}\n\n请先修改这些 agent 的绑定模型后再删除`) 
+        } else {
+          alert(data.error || '删除失败')
+        }
+      }
+    } catch (error) {
+      console.error('Failed to delete model:', error)
+    }
+  }
+
+  const handleEditModel = (providerId: string, model: any) => {
+    setEditingModel({ providerId, model })
+    setShowEditModelModal(true)
+  }
+
+  const handleUpdateModel = async (providerId: string, modelId: string, data: any) => {
+    try {
+      const res = await fetch(`/api/models-config?providerId=${providerId}&modelId=${modelId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+      if (res.ok) {
+        setShowEditModelModal(false)
+        const modelsRes = await fetch('/api/models-config')
+        if (modelsRes.ok) setModelsConfig(await modelsRes.json())
+      }
+    } catch (error) {
+      console.error('Failed to update model:', error)
+    }
+  }
+
+  const handleDeleteProvider = async (providerId: string) => {
+    if (!confirm('确定删除此 Provider 及旗下所有模型？')) return
+    try {
+      // Delete all models in provider
+      const provider = modelsConfig.providers[providerId]
+      const models = provider?.models || []
+      
+      // Check if any model is bound before deleting
+      for (const model of models) {
+        const res = await fetch(`/api/models-config?providerId=${providerId}&modelId=${model.id}`, { method: 'DELETE' })
+        if (!res.ok) {
+          const data = await res.json()
+          if (data.boundAgents) {
+            const agentList = data.boundAgents.join(', ')
+            alert(`无法删除：以下 agent 绑定了该厂商下的模型 ${model.id}\n\n${agentList}\n\n请先修改 agent 绑定模型后再删除整个厂商`)
+            // Refresh to restore state
+            const modelsRes = await fetch('/api/models-config')
+            if (modelsRes.ok) setModelsConfig(await modelsRes.json())
+            return
+          }
+        }
+      }
+      
+      // All models deleted successfully, refresh
+      const modelsRes = await fetch('/api/models-config')
+      if (modelsRes.ok) setModelsConfig(await modelsRes.json())
+    } catch (error) {
+      console.error('Failed to delete provider:', error)
+    }
+  }
+
+  const handleAddModel = async (providerId: string, provider: any, models: any[]) => {
+    try {
+      const res = await fetch('/api/models-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId, provider, models }),
+      })
+      if (res.ok) {
+        // Refresh models config
+        const modelsRes = await fetch('/api/models-config')
+        if (modelsRes.ok) setModelsConfig(await modelsRes.json())
+        setShowAddModelModal(false)
+      }
+    } catch (error) {
+      console.error('Failed to add model:', error)
     }
   }
 
@@ -1957,6 +2637,7 @@ ${agentsForm.tools || '无'}`
                 { id: 'calendar', label: '日历', icon: Calendar },
                 { id: 'projects', label: '项目', icon: FolderKanban },
                 { id: 'agents', label: '员工', icon: Users },
+                { id: 'models', label: '模型', icon: Cpu },
                 { id: 'skills', label: '技能', icon: Sparkles },
                 { id: 'memory', label: '记忆', icon: Brain },
                 { id: 'channels', label: '渠道', icon: Network },
@@ -2006,6 +2687,7 @@ ${agentsForm.tools || '无'}`
             { id: 'calendar', label: '日历', icon: Calendar },
             { id: 'projects', label: '项目', icon: FolderKanban },
             { id: 'agents', label: '员工', icon: Users },
+            { id: 'models', label: '模型', icon: Cpu },
             { id: 'skills', label: '技能', icon: Sparkles },
             { id: 'memory', label: '记忆', icon: Brain },
             { id: 'channels', label: '渠道', icon: Network },
@@ -2135,8 +2817,55 @@ ${agentsForm.tools || '无'}`
                     <h3 className="text-sm font-medium text-white flex items-center gap-2"><span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />实时活动</h3>
                     <ChevronDown className="w-4 h-4 text-gray-500" />
                   </button>
+                  
+                  {/* Realtime Agent Tasks */}
+                  <div className="mb-4 pb-4 border-b border-gray-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-gray-500">Agent 状态</span>
+                      <button onClick={async () => {
+                        try {
+                          const res = await fetch('/api/realtime-tasks')
+                          const data = await res.json()
+                          if (data?.tasks) setRealtimeTasks(data.tasks)
+                        } catch (e) { console.log('Failed to refresh', e) }
+                      }} className="p-1 hover:bg-gray-800 rounded">
+                        <RefreshCw className="w-3 h-3 text-gray-500" />
+                      </button>
+                    </div>
+                    {realtimeTasks.length === 0 ? (
+                      <div className="text-xs text-gray-600">无活动</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {realtimeTasks.map((task, i) => {
+                          const agent = agents.find(a => a.id === task.agentId)
+                          return (
+                            <div key={i} className="flex items-center gap-2">
+                              <div className={`w-1.5 h-1.5 rounded-full ${
+                                task.status === 'running' ? 'bg-green-400 animate-pulse' : 
+                                task.status === 'error' ? 'bg-red-400' : 'bg-gray-500'
+                              }`} />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-white truncate">{agent?.identityEmoji || '🤖'} {task.agentName}</span>
+                                  {task.status === 'running' && task.model && (
+                                    <span className="text-xs text-gray-500 truncate">{task.model.split('/').pop()}</span>
+                                  )}
+                                </div>
+                                {task.status === 'running' && task.task && task.task !== task.agentName && (
+                                  <p className="text-xs text-gray-500 truncate">{task.task}</p>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Recent Tasks */}
+                  <div className="text-xs text-gray-500 mb-2">最近任务</div>
                   <div className="flex-1 space-y-3 overflow-auto">
-                    {tasks.slice(0, 5).map(task => (
+                    {tasks.slice(0, 10).map(task => (
                       <div key={task.id} className="text-sm">
                         <div className="flex items-center gap-2 text-gray-500 text-xs mb-1">
                           <span>{new Date(task.updated_at).toLocaleTimeString()}</span>
@@ -2279,10 +3008,99 @@ ${agentsForm.tools || '无'}`
 
           {/* Agents */}
           {activeTab === 'agents' && (
+            <AgentGroupsView 
+              agents={agents} 
+              groups={agentGroups} 
+              channels={channels}
+              onCreateGroup={handleCreateAgentGroup}
+              onUpdateGroup={handleUpdateAgentGroup}
+              onDeleteGroup={handleDeleteAgentGroup}
+              onModelChange={handleModelChange}
+              onDeleteAgent={handleDeleteAgent}
+              onChannelChange={handleChannelChange}
+              onEditSoul={handleEditSoul}
+              onEditInfo={(agent) => setEditingAgentInfo({ agent, name: agent.identityName, emoji: agent.identityEmoji })}
+            />
+          )}
+
+          {/* Models */}
+          {activeTab === 'models' && (
             <div className="p-4 md:p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl">
-                {agents.map(agent => <AgentCard key={agent.id} agent={agent} onModelChange={handleModelChange} onDelete={handleDeleteAgent} channels={channels} onChannelChange={handleChannelChange} onEditSoul={handleEditSoul} onEditInfo={(agent) => setEditingAgentInfo({ agent, name: agent.identityName, emoji: agent.identityEmoji })} />)}
+              {/* Header */}
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <Cpu className="w-5 h-5 text-blue-400" />
+                  <h2 className="text-lg font-semibold text-white">模型配置</h2>
+                  <span className="text-sm text-gray-500">({modelsConfig.models.length} 个模型)</span>
+                </div>
+                <button onClick={() => setShowAddModelModal(true)} className="linear-btn-primary flex items-center gap-2">
+                  <Plus className="w-4 h-4" />新增模型
+                </button>
               </div>
+
+              {/* Models Grid by Provider */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {Object.entries(modelsConfig.providers || {}).map(([providerId, provider]: [string, any]) => (
+                  <div key={providerId} className="bg-gray-900/30 rounded-xl border border-gray-800 p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                          <Cpu className="w-5 h-5 text-blue-400" />
+                        </div>
+                        <div>
+                          <h3 className="text-white font-medium">{providerId}</h3>
+                          <p className="text-xs text-gray-500">{provider.api || 'openai-completions'}</p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => handleDeleteProvider(providerId)}
+                        className="p-2 hover:bg-gray-700 rounded-lg text-gray-400 hover:text-red-400"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="mb-2 text-xs text-gray-500 font-mono truncate">{provider.baseUrl}</div>
+                    <div className="space-y-2">
+                      {(provider.models || []).map((model: any) => (
+                        <div key={model.id} className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg border border-gray-700">
+                          <div className="flex items-center gap-3">
+                            <div className="flex flex-col">
+                              <span className="text-sm text-white font-medium">{model.name || model.id}</span>
+                              <span className="text-xs text-gray-500 font-mono">{model.id}</span>
+                            </div>
+                            {model.reasoning && (
+                              <span className="px-1.5 py-0.5 text-xs bg-purple-500/20 text-purple-400 rounded">推理</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500">上下文: {(model.contextWindow / 1000).toFixed(0)}K</span>
+                            <button 
+                              onClick={() => handleEditModel(providerId, model)}
+                              className="p-1.5 hover:bg-gray-700 rounded text-gray-400 hover:text-blue-400"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteModel(providerId, model.id)}
+                              className="p-1.5 hover:bg-gray-700 rounded text-gray-400 hover:text-red-400"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {modelsConfig.models.length === 0 && (
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-8 text-center">
+                  <Cpu className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+                  <h3 className="text-white font-medium mb-2">暂无模型配置</h3>
+                  <p className="text-sm text-gray-500 mb-4">点击「新增模型」添加第一个模型</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -2742,7 +3560,7 @@ ${agentsForm.tools || '无'}`
               {/* About */}
               <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 md:p-6">
                 <h3 className="text-lg font-medium text-white mb-4">关于</h3>
-                <p className="text-sm text-gray-400">{projectName} v1.0.5</p>
+                <p className="text-sm text-gray-400">{projectName} v1.0.7</p>
               </div>
             </div>
           )}
@@ -2859,21 +3677,168 @@ ${agentsForm.tools || '无'}`
           {/* Realtime Sessions Tab */}
           {activeTab === 'realtime' && (
             <div className="p-4 md:p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-medium text-white">实时会话</h2>
-                <div className="flex gap-2">
-                  <select 
-                    value={sessionFilter.agentId || ''} 
-                    onChange={e => setSessionFilter({ ...sessionFilter, agentId: e.target.value || undefined })}
-                    className="linear-input text-sm"
-                  >
-                    <option value="">全员工</option>
-                    {agents.map(a => <option key={a.id} value={a.id}>{a.identityEmoji} {a.identityName}</option>)}
-                  </select>
-                  <select 
-                    value={sessionFilter.projectId || ''} 
-                    onChange={e => setSessionFilter({ ...sessionFilter, projectId: e.target.value ? Number(e.target.value) : undefined })}
-                    className="linear-input text-sm"
+              {/* 左右布局：后台运行任务 | 实时会话 */}
+              <div className="flex gap-6 h-[calc(100vh-12rem)]">
+                {/* 左侧：后台运行任务 */}
+                <div className="w-80 flex-shrink-0 flex flex-col">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-green-400" />
+                      <h3 className="text-sm font-medium text-white">后台运行任务</h3>
+                      <span className="px-1.5 py-0.5 text-xs bg-green-500/20 text-green-400 rounded">
+                        {realtimeTasks.filter(t => t.status === 'running').length} 运行
+                      </span>
+                    </div>
+                    <button 
+                      onClick={async () => {
+                        try {
+                          const res = await fetch('/api/realtime-tasks')
+                          const data = await res.json()
+                          if (data?.tasks) setRealtimeTasks(data.tasks)
+                        } catch (e) { console.log('Failed to refresh tasks', e) }
+                      }}
+                      className="p-1.5 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto space-y-2">
+                    {realtimeTasks.length === 0 ? (
+                      <div className="bg-gray-900/30 rounded-lg border border-gray-800 p-4 text-center">
+                        <p className="text-sm text-gray-500">暂无后台运行任务</p>
+                      </div>
+                    ) : (
+                      realtimeTasks.map((task, i) => {
+                        const agent = agents.find(a => a.id === task.agentId)
+                        return (
+                          <div 
+                            key={i}
+                            className={`bg-gray-900/50 rounded-lg border p-3 ${
+                              task.status === 'running' 
+                                ? 'border-green-500/50 hover:border-green-500/80' 
+                                : task.status === 'error'
+                                ? 'border-red-500/50 hover:border-red-500/80'
+                                : 'border-gray-700'
+                            } cursor-pointer transition-colors group`}
+                            onClick={() => {
+                              if (task.sessionId) {
+                                const session = realtimeSessions.find(s => s.id === task.sessionId)
+                                if (session) handleViewSession(session)
+                              }
+                            }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full ${
+                                  task.status === 'running' ? 'bg-green-400 animate-pulse' : 
+                                  task.status === 'error' ? 'bg-red-400' : 'bg-gray-500'
+                                }`} />
+                                <div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-sm font-medium text-white">
+                                      {agent?.identityEmoji || '🤖'} {task.agentName}
+                                    </span>
+                                    {task.isSubagent && (
+                                      <span className="text-xs px-1 py-0.5 rounded bg-purple-500/20 text-purple-400">
+                                        Subagent
+                                      </span>
+                                    )}
+                                    {task.isMainAgent && (
+                                      <span className="text-xs px-1 py-0.5 rounded bg-blue-500/20 text-blue-400">
+                                        主进程
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                      task.status === 'running' 
+                                        ? 'bg-green-500/20 text-green-400' 
+                                        : task.status === 'error'
+                                        ? 'bg-red-500/20 text-red-400'
+                                        : 'bg-gray-700 text-gray-400'
+                                    }`}>
+                                      {task.status === 'running' ? '运行中' : task.status === 'error' ? '失败' : '空闲'}
+                                    </span>
+                                    {task.model && (
+                                      <span className="text-xs text-gray-500 font-mono truncate max-w-[80px]">
+                                        {task.model.split('/').pop()}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {task.lastActive && (
+                                  <span className="text-xs text-gray-500">
+                                    {new Date(task.lastActive).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                )}
+                                {/* 杀死按钮：只对 Subagent 和非运行中的任务显示 */}
+                                {task.isSubagent && task.status !== 'running' && (
+                                  <button
+                                    onClick={async (e) => {
+                                      e.stopPropagation()
+                                      if (!confirm(`确定要杀死 ${task.agentName} 的任务吗？`)) return
+                                      try {
+                                        const res = await fetch(`/api/realtime-tasks?sessionKey=${encodeURIComponent(task.sessionKey)}`, {
+                                          method: 'DELETE'
+                                        })
+                                        const data = await res.json()
+                                        if (data.error) {
+                                          alert(data.error)
+                                        } else {
+                                          // Refresh tasks
+                                          const tasksRes = await fetch('/api/realtime-tasks')
+                                          const tasksData = await tasksRes.json()
+                                          if (tasksData?.tasks) setRealtimeTasks(tasksData.tasks)
+                                        }
+                                      } catch (err) {
+                                        console.error('Failed to kill task:', err)
+                                        alert('终止任务失败')
+                                      }
+                                    }}
+                                    className="p-1 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 rounded text-red-400 hover:text-red-300 transition-all"
+                                    title="杀死任务"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            {task.task && task.task !== task.agentName && (
+                              <p className="text-xs text-gray-400 mt-1.5 truncate">
+                                {task.task}
+                              </p>
+                            )}
+                            {task.childSessions && task.childSessions.length > 0 && (
+                              <div className="mt-2 text-xs text-gray-500">
+                                子任务: {task.childSessions.length} 个
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* 右侧：实时会话 */}
+                <div className="flex-1 flex flex-col min-w-0">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-medium text-white">实时会话</h2>
+                    <div className="flex gap-2">
+                      <select 
+                        value={sessionFilter.agentId || ''} 
+                        onChange={e => setSessionFilter({ ...sessionFilter, agentId: e.target.value || undefined })}
+                        className="linear-input text-sm"
+                      >
+                        <option value="">全员工</option>
+                        {agents.map(a => <option key={a.id} value={a.id}>{a.identityEmoji} {a.identityName}</option>)}
+                      </select>
+                      <select 
+                        value={sessionFilter.projectId || ''} 
+                        onChange={e => setSessionFilter({ ...sessionFilter, projectId: e.target.value ? Number(e.target.value) : undefined })}
+                        className="linear-input text-sm"
                   >
                     <option value="">全项目</option>
                     {projects.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
@@ -2890,6 +3855,10 @@ ${agentsForm.tools || '无'}`
                       } else if (data.error) {
                         console.error('Failed to fetch sessions:', data.error)
                       }
+                      // Also refresh realtime tasks
+                      const tasksRes = await fetch('/api/realtime-tasks')
+                      const tasksData = await tasksRes.json()
+                      if (tasksData?.tasks) setRealtimeTasks(tasksData.tasks)
                     } catch (error) {
                       console.error('Failed to fetch sessions:', error)
                     }
@@ -2966,6 +3935,8 @@ ${agentsForm.tools || '无'}`
                     <p className="text-sm text-gray-500">实时会话直接从会话文件读取</p>
                   </div>
                 )}
+              </div>
+                </div>
               </div>
             </div>
           )}
@@ -3071,6 +4042,14 @@ ${agentsForm.tools || '无'}`
       <CreateTaskModal isOpen={showCreateModal} onClose={() => setShowCreateModal(false)} onCreate={handleCreateTask} agents={agents} />
       <CreateProjectModal isOpen={showCreateProjectModal} onClose={() => setShowCreateProjectModal(false)} onCreate={handleCreateProject} agents={agents} />
       <CreateAgentModal isOpen={showCreateAgentModal} onClose={() => setShowCreateAgentModal(false)} onCreate={handleCreateAgent} channels={channels} />
+      <AddModelModal isOpen={showAddModelModal} onClose={() => setShowAddModelModal(false)} onAdd={handleAddModel} providers={modelsConfig.providers} />
+      <EditModelModal 
+        isOpen={showEditModelModal} 
+        onClose={() => setShowEditModelModal(false)} 
+        onUpdate={handleUpdateModel}
+        providerId={editingModel?.providerId || ''}
+        model={editingModel?.model || null}
+      />
       <CreateChannelModal isOpen={showCreateChannelModal} onClose={() => setShowCreateChannelModal(false)} onCreate={handleCreateChannel} />
       <CreateCronModal isOpen={showCreateCronModal} onClose={() => setShowCreateCronModal(false)} onCreate={handleCreateCron} agents={agents} />
       

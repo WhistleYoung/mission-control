@@ -1,25 +1,10 @@
 import { NextResponse } from 'next/server'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
-import { exec } from 'child_process'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
+import { restartGateway } from '@/lib/gateway'
 import type { NextRequest } from 'next/server'
 
 const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
-
-// Restart OpenClaw Gateway to reload config (delayed, non-blocking)
-function restartGateway() {
-  // Delay restart by 2 seconds to ensure API response is sent first
-  setTimeout(() => {
-    const openclawCmd = process.env.OPENCLAW_PATH || '/home/bullrom/.npm-global/bin/openclaw'
-    exec(`${openclawCmd} gateway restart`, (error) => {
-      if (error) {
-        console.error('Failed to restart OpenClaw Gateway:', error)
-        return
-      }
-      console.log('OpenClaw Gateway restart completed')
-    })
-  }, 2000)
-}
 
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
