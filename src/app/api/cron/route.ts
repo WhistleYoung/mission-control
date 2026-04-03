@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import type { NextRequest } from 'next/server'
 
+// Cache for cron jobs
+let cronCache: { jobs: any[]; total: number; timestamp: number } = { jobs: [], total: 0, timestamp: 0 }
+const CACHE_TTL = 30000 // 30 seconds
+
 // Helper to run openclaw cron commands
 async function runCronCommand(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   const { execSync } = require('child_process')
@@ -17,6 +21,15 @@ export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
+
+  const now = Date.now()
+  const searchParams = new URL(request.url).searchParams
+  const forceRefresh = searchParams.get('refresh') === 'true'
+
+  // Return cached data if still fresh
+  if (!forceRefresh && cronCache.timestamp && (now - cronCache.timestamp) < CACHE_TTL) {
+    return NextResponse.json({ jobs: cronCache.jobs, total: cronCache.total, cached: true })
+  }
 
   try {
     const { stdout } = await runCronCommand(['list'])
@@ -39,9 +52,16 @@ export async function GET(request: NextRequest) {
       deliverChannel: job.delivery?.channel || 'last',
     }))
 
+    // Update cache
+    cronCache = { jobs, total: data.total, timestamp: now }
+
     return NextResponse.json({ jobs, total: data.total })
   } catch (error: any) {
     console.error('Failed to fetch cron jobs:', error)
+    // Return cached data on error
+    if (cronCache.jobs.length > 0) {
+      return NextResponse.json({ jobs: cronCache.jobs, total: cronCache.total, cached: true, error: '使用缓存数据' })
+    }
     return NextResponse.json({ error: '获取定时任务失败', jobs: [], total: 0 }, { status: 500 })
   }
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { execSync } from 'child_process'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
+import { getAgentNames } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
 
 interface RealtimeTask {
@@ -18,16 +19,37 @@ interface RealtimeTask {
   isMainAgent?: boolean
 }
 
+// In-memory cache to avoid slow CLI calls
+let taskCache: { tasks: RealtimeTask[]; timestamp: number } = {
+  tasks: [],
+  timestamp: 0
+}
+const CACHE_TTL = 30000 // 30 seconds
+
 /**
  * Get active/realtime tasks from OpenClaw Gateway via CLI
+ * Uses 5-second cache to avoid slow CLI calls blocking page load
  */
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
 
+  const now = Date.now()
+  const searchParams = new URL(request.url).searchParams
+  const forceRefresh = searchParams.get('refresh') === 'true'
+
+  // Return cached data if still fresh (and not forcing refresh)
+  if (!forceRefresh && taskCache.timestamp && (now - taskCache.timestamp) < CACHE_TTL) {
+    return NextResponse.json({ 
+      tasks: taskCache.tasks,
+      cached: true,
+      age: now - taskCache.timestamp
+    })
+  }
+
   try {
-    // Use CLI to get sessions list - more reliable than WebSocket
+    // Use CLI to get sessions list
     const output = execSync(
       'openclaw gateway call sessions.list --params "{}" --json 2>/dev/null',
       { timeout: 10000 }
@@ -36,12 +58,8 @@ export async function GET(request: NextRequest) {
     const result = JSON.parse(output)
     const tasks: RealtimeTask[] = []
     
-    // Agent name mapping
-    const agentNames: Record<string, string> = {
-      main: '小七',
-      worker: '壹号牛马',
-      devper: 'devper',
-    }
+    // Agent name mapping from openclaw.json
+    const agentNames = getAgentNames()
     
     const sessions = result.sessions || []
     for (const session of sessions) {
@@ -78,9 +96,21 @@ export async function GET(request: NextRequest) {
       })
     }
     
-    return NextResponse.json({ tasks })
+    // Update cache
+    taskCache = { tasks, timestamp: now }
+    
+    return NextResponse.json({ tasks, cached: false, age: 0 })
   } catch (error) {
     console.error('Failed to fetch realtime tasks:', error)
+    // Return cached data on error if available
+    if (taskCache.tasks.length > 0) {
+      return NextResponse.json({ 
+        tasks: taskCache.tasks, 
+        cached: true,
+        error: '使用缓存数据',
+        age: now - taskCache.timestamp
+      })
+    }
     return NextResponse.json({ error: '获取实时任务失败', tasks: [] }, { status: 500 })
   }
 }

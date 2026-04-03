@@ -3,6 +3,7 @@ import { rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } fr
 import { join } from 'path'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { restartGateway } from '@/lib/gateway'
+import { getAgentNames, getAgentEmojis } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
 
 const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
@@ -10,11 +11,8 @@ const LOCAL_CONFIG = '/home/bullrom/mission-control/data/agent-configs.json'
 const TEMPLATE_WORKSPACE = '/home/bullrom/.openclaw/workspace'
 
 function getAgentIdentityName(agentId: string, agentName?: string): string {
-  // Use hardcoded Chinese names for known agents
-  const names: Record<string, string> = {
-    main: '小七',
-    worker: '壹号牛马',
-  }
+  // Use names from openclaw.json config (single source of truth)
+  const names = getAgentNames()
   // If agent has a name in config and it's different from the id, use it
   if (agentName && agentName !== agentId && !names[agentId]) {
     return agentName
@@ -35,12 +33,8 @@ function getAgentIdentityEmoji(agentId: string, workspacePath?: string): string 
     } catch (e) {}
   }
   
-  // Fallback to hardcoded emojis
-  const emojis: Record<string, string> = {
-    main: '🧑💻',
-    worker: '🐂',
-    devper: '🎸',
-  }
+  // Fallback to emojis from openclaw.json config
+  const emojis = getAgentEmojis()
   return emojis[agentId] || '🤖'
 }
 

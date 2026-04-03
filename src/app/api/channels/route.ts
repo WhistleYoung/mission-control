@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { restartGateway } from '@/lib/gateway'
+import { getAgentNames } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
 
 const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
@@ -175,9 +176,6 @@ function getChannelDisplayName(channelType: string): string {
 }
 
 function getAgentName(agentId: string): string {
-  const names: Record<string, string> = {
-    main: '小七',
-    worker: '壹号牛马',
-  }
+  const names = getAgentNames()
   return names[agentId] || agentId
 }

@@ -4,7 +4,18 @@ import type { NextRequest } from 'next/server'
 
 const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
 
+// In-memory cache
+let modelsCache: { data: any; timestamp: number } = { data: null, timestamp: 0 }
+const CACHE_TTL = 5000 // 5 seconds
+
 export async function GET(request: NextRequest) {
+  const now = Date.now()
+  
+  // Return cached data if still fresh
+  if (modelsCache.data && modelsCache.timestamp && (now - modelsCache.timestamp) < CACHE_TTL) {
+    return NextResponse.json(modelsCache.data)
+  }
+  
   try {
     const config = JSON.parse(readFileSync(OPENCLAW_CONFIG, 'utf-8'))
     const models = config.models || {}
@@ -43,9 +54,16 @@ export async function GET(request: NextRequest) {
       }
     }
     
-    return NextResponse.json({ models: modelList })
+    const result = { models: modelList }
+    modelsCache = { data: result, timestamp: now }
+    
+    return NextResponse.json(result)
   } catch (e) {
     console.error('Error reading models from openclaw.json:', e)
+    // Return cached data on error if available
+    if (modelsCache.data) {
+      return NextResponse.json(modelsCache.data)
+    }
     return NextResponse.json({ error: 'Failed to load models' }, { status: 500 })
   }
 }

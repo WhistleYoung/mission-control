@@ -105,6 +105,33 @@ function initializeDatabase() {
       FOREIGN KEY (group_id) REFERENCES agent_groups(id) ON DELETE CASCADE,
       UNIQUE(group_id, agent_id)
     );
+
+    -- Approval history table
+    CREATE TABLE IF NOT EXISTS approval_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      approval_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      request_type TEXT,
+      command TEXT,
+      agent_id TEXT,
+      session_key TEXT,
+      decision TEXT NOT NULL,
+      resolved_by TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      resolved_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Calendar events table
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      date DATE NOT NULL,
+      time TIME,
+      type TEXT DEFAULT 'one-time',
+      agent_id TEXT,
+      agent_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `)
 
   // Create default admin user if not exists

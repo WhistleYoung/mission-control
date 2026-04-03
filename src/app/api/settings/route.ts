@@ -64,28 +64,36 @@ function updateClawhubToken(token: string): { success: boolean; message: string 
   }
 }
 
-// Check if ClawHub token is configured
-function isClawhubTokenConfigured(): boolean {
-  try {
-    const output = execSync(`clawhub whoami 2>&1`, { timeout: 10000 })
-    const text = output.toString()
-    return !text.includes('Not logged in') && !text.includes('Error')
-  } catch (e) {
-    return false
-  }
+// ClawHub cache to avoid slow CLI calls
+let clawhubCache: { loggedIn: boolean; user: string | null; timestamp: number } = {
+  loggedIn: false,
+  user: null,
+  timestamp: 0
 }
+const CLAWHUB_CACHE_TTL = 60000 // 1 minute
 
-// Get current ClawHub logged in user
-function getClawhubUser(): string | null {
+// Get ClawHub status in one call
+function getClawhubStatus(): { loggedIn: boolean; user: string | null } {
+  const now = Date.now()
+  // Return cached result if fresh
+  if (clawhubCache.timestamp && (now - clawhubCache.timestamp) < CLAWHUB_CACHE_TTL) {
+    return { loggedIn: clawhubCache.loggedIn, user: clawhubCache.user }
+  }
+  
   try {
     const output = execSync(`clawhub whoami 2>&1`, { timeout: 10000 })
     const text = output.toString()
-    if (text.includes('Not logged in') || text.includes('Error')) return null
-    // Extract username from output like "Logged in as: username"
-    const match = text.match(/Logged in as:\s*(.+)/)
-    return match ? match[1].trim() : null
+    const loggedIn = !text.includes('Not logged in') && !text.includes('Error')
+    let user: string | null = null
+    if (loggedIn) {
+      const match = text.match(/Logged in as:\s*(.+)/)
+      user = match ? match[1].trim() : null
+    }
+    clawhubCache = { loggedIn, user, timestamp: now }
+    return { loggedIn, user }
   } catch (e) {
-    return null
+    clawhubCache = { loggedIn: false, user: null, timestamp: now }
+    return { loggedIn: false, user: null }
   }
 }
 
@@ -98,9 +106,8 @@ export async function GET(request: NextRequest) {
     ensureSettingsTable()
     const row = db.prepare('SELECT * FROM settings WHERE id = 1').get() as any
     
-    // Check ClawHub login status
-    const clawhubLoggedIn = isClawhubTokenConfigured()
-    const clawhubUser = getClawhubUser()
+    // Check ClawHub login status (cached)
+    const { loggedIn: clawhubLoggedIn, user: clawhubUser } = getClawhubStatus()
     
     return NextResponse.json({
       projectName: row?.project_name || 'Mission Control',

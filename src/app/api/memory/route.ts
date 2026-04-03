@@ -2,20 +2,15 @@ import { NextResponse } from 'next/server'
 import { readdirSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
+import { getAgentNames, getAgentEmojis } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
 
 const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
 
-// Get agent identity info from config
+// Get agent identity info from openclaw.json config
 function getAgentIdentity(agentId: string): { name: string; emoji: string } {
-  const names: Record<string, string> = {
-    main: '小七',
-    worker: '壹号牛马',
-  }
-  const emojis: Record<string, string> = {
-    main: '🧑💻',
-    worker: '🐂',
-  }
+  const names = getAgentNames()
+  const emojis = getAgentEmojis()
   return {
     name: names[agentId] || agentId,
     emoji: emojis[agentId] || '🤖'

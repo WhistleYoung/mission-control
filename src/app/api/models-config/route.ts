@@ -107,6 +107,16 @@ export async function POST(request: NextRequest) {
     
     // Add all models to provider
     for (const model of models) {
+      // Check if model with same id already exists in this provider
+      const existingModel = config.models.providers[providerId].models.find((m: any) => m.id === model.id)
+      if (existingModel) {
+        return NextResponse.json({ 
+          error: `该厂家下已存在同 ID 的模型: ${model.id}（当前名称: ${existingModel.name}，新名称: ${model.name || model.id}）`,
+          existingModelId: model.id,
+          existingModelName: existingModel.name,
+        }, { status: 409 })
+      }
+
       const modelKey = `${providerId}/${model.id}`
       config.models.providers[providerId].models.push({
         id: model.id,

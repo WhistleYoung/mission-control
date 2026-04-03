@@ -3,16 +3,14 @@ import { readdirSync, readFileSync, existsSync, statSync } from 'fs'
 import { join, basename } from 'path'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { pool } from '@/lib/db'
+import { getAgentNames } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
 
 const AGENTS_DIR = '/home/bullrom/.openclaw/agents'
 
-// Agent name mapping
+// Agent name mapping from openclaw.json
 function getAgentName(agentId: string): string {
-  const names: Record<string, string> = {
-    main: '小七',
-    worker: 'Worker',
-  }
+  const names = getAgentNames()
   return names[agentId] || agentId
 }
 

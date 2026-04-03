@@ -18,6 +18,7 @@ export default function LoginPage() {
   const [captchaQuestion, setCaptchaQuestion] = useState('')
   const [captchaInput, setCaptchaInput] = useState('')
   const [loginAttempts, setLoginAttempts] = useState(0)
+  const [projectName, setProjectName] = useState('Mission Control')
   
   const fetchCaptcha = async () => {
     try {
@@ -33,8 +34,21 @@ export default function LoginPage() {
     }
   }
 
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch('/api/settings')
+      const data = await res.json()
+      if (data.projectName) {
+        setProjectName(data.projectName)
+      }
+    } catch (err) {
+      console.error('Failed to fetch settings:', err)
+    }
+  }
+
   useEffect(() => {
     fetchCaptcha()
+    fetchSettings()
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -102,6 +116,11 @@ export default function LoginPage() {
       document.cookie = `mc-auth=true; path=/; max-age=${7 * 24 * 60 * 60}`
       document.cookie = `mc-user=${encodeURIComponent(JSON.stringify(data.user))}; path=/; max-age=${7 * 24 * 60 * 60}`
       
+      // Store project name in cookie for use on main page
+      if (data.projectName) {
+        document.cookie = `mc-project-name=${encodeURIComponent(data.projectName)}; path=/; max-age=${7 * 24 * 60 * 60}`
+      }
+      
       // Small delay to ensure cookie is set before redirect
       setTimeout(() => {
         router.push('/')
@@ -121,7 +140,7 @@ export default function LoginPage() {
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">
               🦞
             </div>
-            <span>Mission Control</span>
+            <span>{projectName}</span>
           </Link>
         </div>
 
@@ -134,7 +153,7 @@ export default function LoginPage() {
         </div>
 
         <div className="relative z-20 flex items-center gap-8 text-sm text-gray-600 dark:text-gray-700">
-          <span>© 2026 Mission Control</span>
+          <span>© 2026 {projectName}</span>
         </div>
 
         {/* Decorative elements */}
@@ -151,7 +170,7 @@ export default function LoginPage() {
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-xl text-white">
               🦞
             </div>
-            <span className="text-white">Mission Control</span>
+            <span className="text-white">{projectName}</span>
           </div>
 
           {/* Header */}

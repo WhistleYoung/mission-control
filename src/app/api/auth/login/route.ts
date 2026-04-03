@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { validateCredentials } from '@/lib/db'
+import { validateCredentials, db } from '@/lib/db'
 import bcrypt from 'bcryptjs'
 
 export async function POST(request: Request) {
@@ -22,14 +22,26 @@ export async function POST(request: Request) {
       )
     }
     
-    // Return success with user info (not password)
+    // Get project name from settings
+    let projectName = 'Mission Control'
+    try {
+      const row = db.prepare('SELECT project_name FROM settings WHERE id = 1').get() as any
+      if (row?.project_name) {
+        projectName = row.project_name
+      }
+    } catch (e) {
+      console.error('Failed to get project name:', e)
+    }
+    
+    // Return success with user info and project name
     return NextResponse.json({
       success: true,
       user: {
         id: user.id,
         username: user.username,
         displayName: user.display_name
-      }
+      },
+      projectName
     })
   } catch (error) {
     console.error('Login error:', error)

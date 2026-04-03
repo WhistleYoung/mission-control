@@ -7,10 +7,10 @@ import {
   MoreHorizontal, ChevronDown, Clock, User, Bot, X, Check, RefreshCw,
   Activity, Terminal, ChevronLeft, ChevronRight, Sparkles, LogOut, Trash2,
   Network, Zap, ExternalLink, FileText, Filter, RefreshCw as RefreshCwIcon,
-  Key, FolderTree, Grid, Cpu, Edit2,
+  Key, FolderTree, Grid, Cpu, Edit2, Shield, ShieldCheck, ShieldX, List,
 } from 'lucide-react'
 
-type Tab = 'inbox' | 'calendar' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs' | 'models'
+type Tab = 'inbox' | 'calendar' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs' | 'models' | 'approvals'
 type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'in-review' | 'done'
 type Priority = 'urgent' | 'high' | 'medium' | 'low'
 type MemoryFilter = 'daily' | 'long-term' | 'all'
@@ -1712,6 +1712,7 @@ export default function MissionControl() {
   const [activityExpanded, setActivityExpanded] = useState(true)
   const [currentUser, setCurrentUser] = useState<{ username: string; displayName: string } | null>(null)
   const [projectName, setProjectName] = useState('Mission Control')
+  const [projectNameLoaded, setProjectNameLoaded] = useState(false)
   const [memoryFilter, setMemoryFilter] = useState<MemoryFilter>('all')
   const [memoryAgentFilter, setMemoryAgentFilter] = useState<string>('all')
   const [calendarMonth, setCalendarMonth] = useState(new Date())
@@ -1751,10 +1752,16 @@ export default function MissionControl() {
   const [soulForm, setSoulForm] = useState({ coreTruths: '', boundaries: '', vibe: '', continuity: '' })
   const [userForm, setUserForm] = useState({ name: '', callName: '', pronouns: '', timezone: '', notes: '', context: '' })
 
+  // Approvals state
+  const [pendingApprovals, setPendingApprovals] = useState<any[]>([])
+  const [approvalHistory, setApprovalHistory] = useState<any[]>([])
+  const [approvalTab, setApprovalTab] = useState<'pending' | 'history'>('pending')
+  const [isResolvingApproval, setIsResolvingApproval] = useState(false)
+
   const getCookie = (name: string): string | null => {
     if (typeof document === 'undefined') return null
     const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'))
-    return match ? match[2] : null
+    return match ? decodeURIComponent(match[2]) : null
   }
 
   useEffect(() => {
@@ -1765,6 +1772,13 @@ export default function MissionControl() {
         setCurrentUser(JSON.parse(decodeURIComponent(userStr)))
       } catch { router.push('/login') }
     } else { router.push('/login') }
+    
+    // Load project name from cookie immediately
+    const savedProjectName = getCookie('mc-project-name')
+    if (savedProjectName) {
+      setProjectName(savedProjectName)
+      setProjectNameLoaded(true)
+    }
   }, [router])
 
   // Auto-reset calendar to current month when switching to calendar tab
@@ -1780,6 +1794,23 @@ export default function MissionControl() {
       fetchLogs()
     }
   }, [activeTab])
+
+  // Load approvals when switching to approvals tab
+  useEffect(() => {
+    if (activeTab === 'approvals') {
+      if (approvalTab === 'pending') {
+        fetch('/api/approvals')
+          .then(res => res.json())
+          .then(data => { if (data.approvals) setPendingApprovals(data.approvals) })
+          .catch(console.error)
+      } else {
+        fetch('/api/approvals?history=true')
+          .then(res => res.json())
+          .then(data => { if (data.approvals) setApprovalHistory(data.approvals) })
+          .catch(console.error)
+      }
+    }
+  }, [activeTab, approvalTab])
 
   // Load skills when switching to skills tab
   const fetchInstalledSkills = async () => {
@@ -1953,89 +1984,67 @@ export default function MissionControl() {
     }
   }
 
-  // Better fetch with retry - don't timeout too aggressively
-  const fetchWithRetry = async (url: string, retries = 1) => {
-    for (let i = 0; i <= retries; i++) {
-      try {
-        const res = await fetch(url)
-        return await res.json()
-      } catch (error) {
-        if (i === retries) return null
-        await new Promise(r => setTimeout(r, 1000))
+  // Fast fetch with timeout - optimized for speed
+  const fastFetch = async (url: string, timeout = 5000) => {
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), timeout)
+      const res = await fetch(url, { signal: controller.signal })
+      clearTimeout(timeoutId)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return await res.json()
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.log(`Fetch timeout for ${url}`)
       }
+      return null
     }
-    return null
   }
 
-  // Fetch real data
-  const fetchData = async () => {
-    try {
-      const [tasksRes, projectsRes, eventsRes, agentsRes, memoriesRes, channelsRes, cronRes, settingsRes, conversationsRes] = await Promise.all([
-        fetchWithRetry('/api/tasks'),
-        fetchWithRetry('/api/projects'),
-        fetchWithRetry('/api/events'),
-        fetchWithRetry('/api/agents'),
-        fetchWithRetry('/api/memory'),
-        fetchWithRetry('/api/channels'),
-        fetchWithRetry('/api/cron'),
-        fetchWithRetry('/api/settings'),
-        fetchWithRetry('/api/conversations'),
-      ])
-
-      // Update state only if we got valid data
-      if (Array.isArray(tasksRes)) setTasks(tasksRes)
-      if (Array.isArray(projectsRes)) setProjects(projectsRes)
-      if (agentsRes?.agents) setAgents(agentsRes.agents)
-      if (agentsRes?.skills) setSkills(agentsRes.skills)
-      
-      // Fetch agent groups
-      try {
-        const groupsRes = await fetchWithRetry('/api/agent-groups')
-        if (Array.isArray(groupsRes)) setAgentGroups(groupsRes)
-      } catch (e) { console.error('Failed to fetch agent groups:', e) }
-      
-      // Fetch models config
-      try {
-        const modelsRes = await fetchWithRetry('/api/models-config')
-        if (modelsRes?.models) setModelsConfig(modelsRes)
-      } catch (e) { console.error('Failed to fetch models config:', e) }
-      
-      if (eventsRes?.custom || eventsRes?.cron) {
-        const custom = eventsRes.custom || []
-        const cron = eventsRes.cron || []
-        setCalendarEvents([...cron, ...custom])
-      }
-
-      if (Array.isArray(memoriesRes)) setMemories(memoriesRes)
-      if (Array.isArray(channelsRes)) setChannels(channelsRes)
-      if (cronRes?.jobs) setCronJobs(cronRes.jobs)
-
-      if (settingsRes?.projectName) {
-        setProjectName(settingsRes.projectName)
-        document.title = settingsRes.projectName
-      }
-      if (Array.isArray(conversationsRes)) setConversations(conversationsRes)
-        
-        // Fetch realtime sessions from session files
-        try {
-          const sessionsRes = await fetchWithRetry('/api/sessions')
-          if (Array.isArray(sessionsRes)) setRealtimeSessions(sessionsRes)
-        } catch (e) { console.log('Failed to fetch realtime sessions', e) }
-        
-        // Fetch realtime tasks from Gateway
-        try {
-          const tasksRes = await fetchWithRetry('/api/realtime-tasks')
-          if (tasksRes?.tasks) setRealtimeTasks(tasksRes.tasks)
-        } catch (e) { console.log('Failed to fetch realtime tasks', e) }
-
-      setApiStatus('connected')
-    } catch (error) {
-      console.error('Failed to fetch data:', error)
-      // Only set disconnected if we haven't loaded anything yet
-      if (tasks.length === 0) {
-        setApiStatus('disconnected')
-      }
-    }
+  // Fire-and-forget data fetching - optimized with Promise.all
+  const fetchData = () => {
+    // Set connected immediately (optimistic)
+    setApiStatus('connected')
+    
+    // Core data: fetch in parallel with Promise.all for faster initial load
+    Promise.all([
+      fastFetch('/api/tasks').then(data => { if (Array.isArray(data)) setTasks(data) }),
+      fastFetch('/api/projects').then(data => { if (Array.isArray(data)) setProjects(data) }),
+      fastFetch('/api/agents').then(data => { 
+        if (data?.agents) setAgents(data.agents)
+        if (data?.skills) setSkills(data.skills)
+      }),
+      fastFetch('/api/settings').then(data => {
+        if (data?.projectName) {
+          setProjectName(data.projectName)
+          setProjectNameLoaded(true)
+          document.title = data.projectName
+        }
+      }),
+    ]).catch(e => console.error('Core data fetch error', e))
+    
+    // Secondary data: fetch in parallel, lower priority
+    Promise.all([
+      fastFetch('/api/channels').then(data => { if (Array.isArray(data)) setChannels(data) }),
+      fastFetch('/api/conversations').then(data => { if (Array.isArray(data)) setConversations(data) }),
+      fastFetch('/api/agent-groups').then(data => { if (Array.isArray(data)) setAgentGroups(data) }),
+      fastFetch('/api/models-config').then(data => { if (data?.models) setModelsConfig(data) }),
+      fastFetch('/api/sessions').then(data => { if (Array.isArray(data)) setRealtimeSessions(data) }),
+    ]).catch(e => console.error('Secondary data fetch error', e))
+    
+    // Background data: lower priority, fetch last
+    Promise.all([
+      fastFetch('/api/events').then(data => {
+        if (data?.custom || data?.cron) {
+          const custom = data.custom || []
+          const cron = data.cron || []
+          setCalendarEvents([...cron, ...custom])
+        }
+      }),
+      fastFetch('/api/memory').then(data => { if (Array.isArray(data)) setMemories(data) }),
+      fastFetch('/api/cron').then(data => { if (data?.jobs) setCronJobs(data.jobs) }),
+      fastFetch('/api/realtime-tasks').then(data => { if (data?.tasks) setRealtimeTasks(data.tasks) }),
+    ]).catch(e => console.error('Background data fetch error', e))
   }
 
   useEffect(() => { 
@@ -2336,14 +2345,19 @@ export default function MissionControl() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ providerId, provider, models }),
       })
+      const data = await res.json()
       if (res.ok) {
         // Refresh models config
         const modelsRes = await fetch('/api/models-config')
         if (modelsRes.ok) setModelsConfig(await modelsRes.json())
         setShowAddModelModal(false)
+      } else {
+        // Show error message from server
+        alert(data.error || '添加模型失败')
       }
     } catch (error) {
       console.error('Failed to add model:', error)
+      alert('添加模型失败: 网络错误')
     }
   }
 
@@ -2423,7 +2437,7 @@ ${agentsForm.tools || '无'}`
       })
       if (res.ok) {
         // Refresh agents to get updated data
-        const agentsRes = await fetchWithRetry('/api/agents')
+        const agentsRes = await fastFetch('/api/agents')
         if (agentsRes?.agents) setAgents(agentsRes.agents)
         setEditingSoulAgent(null)
       }
@@ -2614,7 +2628,7 @@ ${agentsForm.tools || '无'}`
         </button>
         <div className="flex items-center gap-2">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">🦞</div>
-          <span className="font-semibold text-white text-sm">{projectName}</span>
+          <span className="font-semibold text-white text-sm">{projectName || 'Mission Control'}</span>
         </div>
         <div className="w-10" />
       </header>
@@ -2627,7 +2641,7 @@ ${agentsForm.tools || '无'}`
             <div className="p-4 border-b border-gray-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">🦞</div>
-                <span className="font-semibold text-white">{projectName}</span>
+                <span className="font-semibold text-white">{projectName || 'Mission Control'}</span>
               </div>
               <button onClick={() => setMobileMenuOpen(false)} className="p-2 hover:bg-gray-800 rounded-lg"><X className="w-5 h-5 text-gray-400" /></button>
             </div>
@@ -2645,6 +2659,7 @@ ${agentsForm.tools || '无'}`
                 { id: 'realtime', label: '实时会话', icon: Zap },
                 { id: 'logs', label: '工具日志', icon: FileText },
                 { id: 'settings', label: '设置', icon: Settings },
+                { id: 'approvals', label: '权限审核', icon: Shield },
               ].map(item => (
                 <button key={item.id} onClick={() => { setActiveTab(item.id as Tab); setMobileMenuOpen(false) }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 ${activeTab === item.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white'}`}>
                   <item.icon className="w-5 h-5" />{item.label}
@@ -2678,7 +2693,7 @@ ${agentsForm.tools || '无'}`
         <div className="p-4 border-b border-gray-800">
           <div className="flex items-center gap-2">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">🦞</div>
-            <span className="font-semibold text-white">{projectName}</span>
+            <span className="font-semibold text-white">{projectName || 'Mission Control'}</span>
           </div>
         </div>
         <nav className="flex-1 p-2">
@@ -2694,6 +2709,7 @@ ${agentsForm.tools || '无'}`
             { id: 'timing', label: '定时任务', icon: Clock },
             { id: 'realtime', label: '实时会话', icon: Zap },
             { id: 'logs', label: '工具日志', icon: FileText },
+            { id: 'approvals', label: '权限审核', icon: Shield },
             { id: 'settings', label: '设置', icon: Settings },
           ].map(item => (
             <button key={item.id} onClick={() => setActiveTab(item.id as Tab)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 ${activeTab === item.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white'}`}>
@@ -2737,7 +2753,8 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'timing' && '定时任务'}
               {activeTab === 'realtime' && '实时会话'}
               {activeTab === 'logs' && '工具日志'}
-              {activeTab === 'settings' && '设置'}
+              {activeTab === 'models' && '模型'}
+              {activeTab === 'approvals' && '权限审核'}
             </h1>
             <span className="text-sm text-gray-500">
               {activeTab === 'inbox' && `${tasks.length} 个任务`}
@@ -2785,7 +2802,8 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'channels' && '渠道'}
               {activeTab === 'timing' && '定时任务'}
               {activeTab === 'realtime' && '实时会话'}
-              {activeTab === 'settings' && '设置'}
+              {activeTab === 'models' && '模型'}
+              {activeTab === 'approvals' && '权限审核'}
             </h1>
             <span className="text-sm text-gray-500">
               {activeTab === 'inbox' && `${tasks.length} 个任务`}
@@ -2940,6 +2958,251 @@ ${agentsForm.tools || '无'}`
                     )
                   })}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Approvals Panel */}
+          {activeTab === 'approvals' && (
+            <div className="p-4 md:p-6">
+              <div className="max-w-4xl">
+                {/* Header */}
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-yellow-500/20 flex items-center justify-center">
+                      <Shield className="w-5 h-5 text-yellow-400" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-semibold text-white">权限审核</h2>
+                      <p className="text-xs text-gray-500">管理 Agent 执行权限请求</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      setApprovalTab('pending')
+                      try {
+                        const res = await fetch('/api/approvals')
+                        const data = await res.json()
+                        if (data.approvals) setPendingApprovals(data.approvals)
+                      } catch (e) { console.error('Failed to fetch approvals', e) }
+                    }}
+                    className="linear-btn-secondary flex items-center gap-2"
+                  >
+                    <RefreshCw className="w-4 h-4" />刷新
+                  </button>
+                </div>
+
+                {/* Tab Switcher */}
+                <div className="flex gap-2 mb-6">
+                  <button
+                    onClick={() => {
+                      setApprovalTab('pending')
+                      fetch('/api/approvals')
+                        .then(res => res.json())
+                        .then(data => { if (data.approvals) setPendingApprovals(data.approvals) })
+                        .catch(console.error)
+                    }}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      approvalTab === 'pending'
+                        ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                        : 'bg-gray-800 text-gray-400 border border-gray-700'
+                    }`}
+                  >
+                    <Shield className="w-4 h-4 inline mr-2" />待审批 ({pendingApprovals.length})
+                  </button>
+                  <button
+                    onClick={() => {
+                      setApprovalTab('history')
+                      fetch('/api/approvals?history=true')
+                        .then(res => res.json())
+                        .then(data => { if (data.approvals) setApprovalHistory(data.approvals) })
+                        .catch(console.error)
+                    }}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      approvalTab === 'history'
+                        ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                        : 'bg-gray-800 text-gray-400 border border-gray-700'
+                    }`}
+                  >
+                    <Clock className="w-4 h-4 inline mr-2" />历史记录
+                  </button>
+                </div>
+
+                {/* Pending Approvals */}
+                {approvalTab === 'pending' && (
+                  <div>
+                    {pendingApprovals.length === 0 ? (
+                      <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-8 text-center">
+                        <ShieldCheck className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+                        <h3 className="text-white font-medium mb-2">暂无待审批项</h3>
+                        <p className="text-sm text-gray-500">所有权限请求均已处理</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {pendingApprovals.map((approval, i) => (
+                          <div key={i} className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                            <div className="flex items-start justify-between mb-3">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                                  approval.kind === 'exec'
+                                    ? 'bg-orange-500/20 text-orange-400'
+                                    : 'bg-purple-500/20 text-purple-400'
+                                }`}>
+                                  {approval.kind === 'exec' ? <Terminal className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
+                                </div>
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className={`px-2 py-0.5 text-xs rounded ${
+                                      approval.kind === 'exec'
+                                        ? 'bg-orange-500/20 text-orange-400'
+                                        : 'bg-purple-500/20 text-purple-400'
+                                    }`}>
+                                      {approval.kind === 'exec' ? '命令执行' : '插件请求'}
+                                    </span>
+                                    <span className="text-xs text-gray-500">
+                                      {approval.agent_name || approval.agent_id} · {approval.request_type}
+                                    </span>
+                                  </div>
+                                  <p className="text-sm text-white mt-1 font-mono truncate max-w-md">
+                                    {approval.command || approval.description || approval.request_type}
+                                  </p>
+                                  {approval.session_key && (
+                                    <p className="text-xs text-gray-600 mt-1 truncate max-w-md">
+                                      会话: {approval.session_key}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <span className="text-xs text-gray-500">
+                                {new Date(approval.created_at).toLocaleString('zh-CN')}
+                              </span>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={async () => {
+                                  setIsResolvingApproval(true)
+                                  try {
+                                    await fetch('/api/approvals', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ id: approval.id, kind: approval.kind, decision: 'allow' }),
+                                    })
+                                    // Refresh pending list
+                                    const res = await fetch('/api/approvals')
+                                    const data = await res.json()
+                                    if (data.approvals) setPendingApprovals(data.approvals)
+                                  } catch (e) { console.error('Failed to resolve approval', e) }
+                                  setIsResolvingApproval(false)
+                                }}
+                                disabled={isResolvingApproval}
+                                className="flex-1 py-2 px-3 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                              >
+                                <Check className="w-4 h-4 inline mr-1" />运行单次
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  if (!confirm('确定运行全部吗？')) return
+                                  setIsResolvingApproval(true)
+                                  try {
+                                    await fetch('/api/approvals', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ id: approval.id, kind: approval.kind, decision: 'allow' }),
+                                    })
+                                    // Refresh pending list
+                                    const res = await fetch('/api/approvals')
+                                    const data = await res.json()
+                                    if (data.approvals) setPendingApprovals(data.approvals)
+                                  } catch (e) { console.error('Failed to resolve approval', e) }
+                                  setIsResolvingApproval(false)
+                                }}
+                                disabled={isResolvingApproval}
+                                className="flex-1 py-2 px-3 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                              >
+                                <Zap className="w-4 h-4 inline mr-1" />运行全部
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  setIsResolvingApproval(true)
+                                  try {
+                                    await fetch('/api/approvals', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ id: approval.id, kind: approval.kind, decision: 'deny' }),
+                                    })
+                                    // Refresh pending list
+                                    const res = await fetch('/api/approvals')
+                                    const data = await res.json()
+                                    if (data.approvals) setPendingApprovals(data.approvals)
+                                  } catch (e) { console.error('Failed to resolve approval', e) }
+                                  setIsResolvingApproval(false)
+                                }}
+                                disabled={isResolvingApproval}
+                                className="flex-1 py-2 px-3 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                              >
+                                <X className="w-4 h-4 inline mr-1" />拒绝
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* History */}
+                {approvalTab === 'history' && (
+                  <div>
+                    {approvalHistory.length === 0 ? (
+                      <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-8 text-center">
+                        <List className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+                        <h3 className="text-white font-medium mb-2">暂无历史记录</h3>
+                        <p className="text-sm text-gray-500">审批历史将显示在这里</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {approvalHistory.map((record: any, i: number) => (
+                          <div key={i} className="bg-gray-900/50 rounded-lg border border-gray-800 p-3 flex items-center gap-3">
+                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                              record.decision === 'allow'
+                                ? 'bg-green-500/20 text-green-400'
+                                : 'bg-red-500/20 text-red-400'
+                            }`}>
+                              {record.decision === 'allow' ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className={`px-2 py-0.5 text-xs rounded ${
+                                  record.kind === 'exec'
+                                    ? 'bg-orange-500/20 text-orange-400'
+                                    : 'bg-purple-500/20 text-purple-400'
+                                }`}>
+                                  {record.kind === 'exec' ? '命令' : '插件'}
+                                </span>
+                                <span className={`text-xs px-2 py-0.5 rounded ${
+                                  record.decision === 'allow'
+                                    ? 'bg-green-500/20 text-green-400'
+                                    : 'bg-red-500/20 text-red-400'
+                                }`}>
+                                  {record.decision === 'allow' ? '已允许' : '已拒绝'}
+                                </span>
+                                <span className="text-xs text-gray-500">
+                                  by {record.resolved_by || '系统'}
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-300 truncate font-mono">
+                                {record.command || record.approval_id}
+                              </p>
+                              <p className="text-xs text-gray-600 mt-0.5">
+                                {new Date(record.created_at).toLocaleString('zh-CN')} → {new Date(record.resolved_at).toLocaleString('zh-CN')}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -3560,7 +3823,7 @@ ${agentsForm.tools || '无'}`
               {/* About */}
               <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 md:p-6">
                 <h3 className="text-lg font-medium text-white mb-4">关于</h3>
-                <p className="text-sm text-gray-400">{projectName} v1.0.7</p>
+                <p className="text-sm text-gray-400">{projectName || 'Mission Control'} v1.0.9</p>
               </div>
             </div>
           )}
