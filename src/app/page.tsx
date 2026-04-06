@@ -3,14 +3,15 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  Inbox, Calendar, FolderKanban, Brain, Settings, Users, Plus, Search, MessageSquare,
+  Inbox, FolderKanban, Brain, Settings, Users, Plus, Search, MessageSquare,
   MoreHorizontal, ChevronDown, Clock, User, Bot, X, Check, RefreshCw,
   Activity, Terminal, ChevronLeft, ChevronRight, Sparkles, LogOut, Trash2,
   Network, Zap, ExternalLink, FileText, Filter, RefreshCw as RefreshCwIcon,
   Key, FolderTree, Grid, Cpu, Edit2, Shield, ShieldCheck, ShieldX, List,
+  TrendingUp,
 } from 'lucide-react'
 
-type Tab = 'inbox' | 'calendar' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs' | 'models' | 'approvals'
+type Tab = 'inbox' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs' | 'models' | 'approvals' | 'usage'
 type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'in-review' | 'done'
 type Priority = 'urgent' | 'high' | 'medium' | 'low'
 type MemoryFilter = 'daily' | 'long-term' | 'all'
@@ -74,17 +75,6 @@ interface Skill {
   name: string
   status: 'ready' | 'needs_setup' | 'unknown'
   description: string
-}
-
-interface CalendarEvent {
-  id: number | string
-  title: string
-  date: string
-  time: string
-  type: 'cron' | 'one-time'
-  status: 'scheduled' | 'running' | 'completed' | 'failed'
-  agent_id?: string
-  agent_name?: string
 }
 
 interface CronJob {
@@ -1675,7 +1665,6 @@ export default function MissionControl() {
   const [activeTaskColumn, setActiveTaskColumn] = useState<string>('backlog')
   const [tasks, setTasks] = useState<Task[]>([])
   const [projects, setProjects] = useState<Project[]>([])
-  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentGroups, setAgentGroups] = useState<{id: number; name: string; emoji: string; color: string; sortOrder: number; agentIds: string[]}[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
@@ -1715,7 +1704,6 @@ export default function MissionControl() {
   const [projectNameLoaded, setProjectNameLoaded] = useState(false)
   const [memoryFilter, setMemoryFilter] = useState<MemoryFilter>('all')
   const [memoryAgentFilter, setMemoryAgentFilter] = useState<string>('all')
-  const [calendarMonth, setCalendarMonth] = useState(new Date())
   const [apiStatus, setApiStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const [cronJobs, setCronJobs] = useState<CronJob[]>([])
   const [showCreateCronModal, setShowCreateCronModal] = useState(false)
@@ -1758,6 +1746,17 @@ export default function MissionControl() {
   const [approvalTab, setApprovalTab] = useState<'pending' | 'history'>('pending')
   const [isResolvingApproval, setIsResolvingApproval] = useState(false)
 
+  // Usage state
+  const [usageData, setUsageData] = useState<{
+    total: { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number }
+    totalSessions: number
+    agents: any[]
+    models: any[]
+    daily: any[]
+    hourly: any[]
+    monthly: any[]
+  } | null>(null)
+
   const getCookie = (name: string): string | null => {
     if (typeof document === 'undefined') return null
     const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'))
@@ -1780,13 +1779,6 @@ export default function MissionControl() {
       setProjectNameLoaded(true)
     }
   }, [router])
-
-  // Auto-reset calendar to current month when switching to calendar tab
-  useEffect(() => {
-    if (activeTab === 'calendar') {
-      setCalendarMonth(new Date())
-    }
-  }, [activeTab])
 
   // Load logs when switching to logs tab
   useEffect(() => {
@@ -2001,12 +1993,39 @@ export default function MissionControl() {
     }
   }
 
-  // Fire-and-forget data fetching - optimized with Promise.all
+  // Tab data fetching configuration - single source of truth for all tab data loading
+  // Add new tabs here to enable lazy loading
+  const TAB_DATA_CONFIG: Record<string, () => void> = {
+    realtime: () => {
+      fastFetch('/api/realtime-tasks').then(data => { if (data?.tasks) setRealtimeTasks(data.tasks) })
+      fastFetch('/api/sessions').then(data => { if (Array.isArray(data)) setRealtimeSessions(data) })
+    },
+    timing: () => {
+      fastFetch('/api/cron').then(data => { if (data?.jobs) setCronJobs(data.jobs) })
+    },
+    models: () => {
+      fastFetch('/api/models-config').then(data => { if (data?.models) setModelsConfig(data) })
+    },
+    memory: () => {
+      fastFetch('/api/memory').then(data => { if (Array.isArray(data)) setMemories(data) })
+    },
+    channels: () => {
+      fastFetch('/api/channels').then(data => { if (Array.isArray(data)) setChannels(data) })
+    },
+    usage: () => {
+      fastFetch('/api/usage').then(data => { if (data?.total !== undefined) setUsageData(data) })
+    },
+  }
+
+  // Unified tab data loading - automatically handles all configured tabs
+  useEffect(() => {
+    const fetcher = TAB_DATA_CONFIG[activeTab]
+    if (fetcher) fetcher()
+  }, [activeTab])
+
+  // Core data: fetch on mount for fast initial page render
   const fetchData = () => {
-    // Set connected immediately (optimistic)
     setApiStatus('connected')
-    
-    // Core data: fetch in parallel with Promise.all for faster initial load
     Promise.all([
       fastFetch('/api/tasks').then(data => { if (Array.isArray(data)) setTasks(data) }),
       fastFetch('/api/projects').then(data => { if (Array.isArray(data)) setProjects(data) }),
@@ -2022,29 +2041,6 @@ export default function MissionControl() {
         }
       }),
     ]).catch(e => console.error('Core data fetch error', e))
-    
-    // Secondary data: fetch in parallel, lower priority
-    Promise.all([
-      fastFetch('/api/channels').then(data => { if (Array.isArray(data)) setChannels(data) }),
-      fastFetch('/api/conversations').then(data => { if (Array.isArray(data)) setConversations(data) }),
-      fastFetch('/api/agent-groups').then(data => { if (Array.isArray(data)) setAgentGroups(data) }),
-      fastFetch('/api/models-config').then(data => { if (data?.models) setModelsConfig(data) }),
-      fastFetch('/api/sessions').then(data => { if (Array.isArray(data)) setRealtimeSessions(data) }),
-    ]).catch(e => console.error('Secondary data fetch error', e))
-    
-    // Background data: lower priority, fetch last
-    Promise.all([
-      fastFetch('/api/events').then(data => {
-        if (data?.custom || data?.cron) {
-          const custom = data.custom || []
-          const cron = data.cron || []
-          setCalendarEvents([...cron, ...custom])
-        }
-      }),
-      fastFetch('/api/memory').then(data => { if (Array.isArray(data)) setMemories(data) }),
-      fastFetch('/api/cron').then(data => { if (data?.jobs) setCronJobs(data.jobs) }),
-      fastFetch('/api/realtime-tasks').then(data => { if (data?.tasks) setRealtimeTasks(data.tasks) }),
-    ]).catch(e => console.error('Background data fetch error', e))
   }
 
   useEffect(() => { 
@@ -2648,7 +2644,6 @@ ${agentsForm.tools || '无'}`
             <nav className="flex-1 p-2 overflow-auto">
               {[
                 { id: 'inbox', label: '任务看板', icon: Inbox },
-                { id: 'calendar', label: '日历', icon: Calendar },
                 { id: 'projects', label: '项目', icon: FolderKanban },
                 { id: 'agents', label: '员工', icon: Users },
                 { id: 'models', label: '模型', icon: Cpu },
@@ -2658,6 +2653,7 @@ ${agentsForm.tools || '无'}`
                 { id: 'timing', label: '定时任务', icon: Clock },
                 { id: 'realtime', label: '实时会话', icon: Zap },
                 { id: 'logs', label: '工具日志', icon: FileText },
+                { id: 'usage', label: '模型用量', icon: TrendingUp },
                 { id: 'settings', label: '设置', icon: Settings },
                 { id: 'approvals', label: '权限审核', icon: Shield },
               ].map(item => (
@@ -2699,7 +2695,6 @@ ${agentsForm.tools || '无'}`
         <nav className="flex-1 p-2">
           {[
             { id: 'inbox', label: '任务看板', icon: Inbox },
-            { id: 'calendar', label: '日历', icon: Calendar },
             { id: 'projects', label: '项目', icon: FolderKanban },
             { id: 'agents', label: '员工', icon: Users },
             { id: 'models', label: '模型', icon: Cpu },
@@ -2709,6 +2704,7 @@ ${agentsForm.tools || '无'}`
             { id: 'timing', label: '定时任务', icon: Clock },
             { id: 'realtime', label: '实时会话', icon: Zap },
             { id: 'logs', label: '工具日志', icon: FileText },
+            { id: 'usage', label: '模型用量', icon: TrendingUp },
             { id: 'approvals', label: '权限审核', icon: Shield },
             { id: 'settings', label: '设置', icon: Settings },
           ].map(item => (
@@ -2744,7 +2740,6 @@ ${agentsForm.tools || '无'}`
           <div className="flex items-center gap-4">
             <h1 className="text-lg font-semibold text-white">
               {activeTab === 'inbox' && '任务看板'}
-              {activeTab === 'calendar' && '日历'}
               {activeTab === 'projects' && '项目'}
               {activeTab === 'agents' && '员工'}
               {activeTab === 'skills' && '技能'}
@@ -2754,6 +2749,7 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'realtime' && '实时会话'}
               {activeTab === 'logs' && '工具日志'}
               {activeTab === 'models' && '模型'}
+              {activeTab === 'usage' && '模型用量'}
               {activeTab === 'approvals' && '权限审核'}
             </h1>
             <span className="text-sm text-gray-500">
@@ -2794,7 +2790,6 @@ ${agentsForm.tools || '无'}`
           <div className="flex items-center justify-between mb-3">
             <h1 className="text-lg font-semibold text-white">
               {activeTab === 'inbox' && '任务看板'}
-              {activeTab === 'calendar' && '日历'}
               {activeTab === 'projects' && '项目'}
               {activeTab === 'agents' && '员工'}
               {activeTab === 'skills' && '技能'}
@@ -2958,6 +2953,301 @@ ${agentsForm.tools || '无'}`
                     )
                   })}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Usage Panel */}
+          {activeTab === 'usage' && (
+            <div className="p-4 md:p-6 overflow-auto">
+              {/* Summary Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                      <TrendingUp className="w-5 h-5 text-blue-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">总 Token 数</p>
+                      <p className="text-xl font-semibold text-white">{usageData?.total.totalTokens.toLocaleString() || 0}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs text-gray-500">
+                    <span>输入: {(usageData?.total.inputTokens || 0).toLocaleString()}</span>
+                    <span>输出: {(usageData?.total.outputTokens || 0).toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center">
+                      <Cpu className="w-5 h-5 text-green-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">预估费用</p>
+                      <p className="text-xl font-semibold text-white">${(usageData?.total.cost || 0).toFixed(4)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs text-gray-500">
+                    <span>缓存读: {(usageData?.total.cacheRead || 0).toLocaleString()}</span>
+                    <span>缓存写: {(usageData?.total.cacheWrite || 0).toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                      <MessageSquare className="w-5 h-5 text-purple-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">会话数</p>
+                      <p className="text-xl font-semibold text-white">{usageData?.totalSessions || 0}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-orange-500/20 flex items-center justify-center">
+                      <Bot className="w-5 h-5 text-orange-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Agent 数</p>
+                      <p className="text-xl font-semibold text-white">{usageData?.agents.length || 0}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* By Agent */}
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <h3 className="text-white font-semibold mb-4">按 Agent 分组</h3>
+                  <div className="space-y-3">
+                    {(usageData?.agents || []).map((agent: any) => (
+                      <div key={agent.agentId} className="bg-gray-800/50 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <Bot className="w-4 h-4 text-blue-400" />
+                            <span className="text-white text-sm font-medium">{agent.agentName}</span>
+                          </div>
+                          <span className="text-xs text-gray-500">{agent.sessionCount} 会话</span>
+                        </div>
+                        {/* Token bar */}
+                        <div className="h-2 bg-gray-700 rounded-full overflow-hidden mb-2">
+                          <div 
+                            className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all"
+                            style={{ width: `${usageData?.total.totalTokens ? Math.min(100, (agent.totalTokens / usageData.total.totalTokens) * 100) : 0}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-400">{agent.totalTokens.toLocaleString()} tokens</span>
+                          <span className="text-gray-500">${agent.cost.toFixed(4)}</span>
+                        </div>
+                        {/* Model breakdown */}
+                        {agent.models.length > 1 && (
+                          <div className="mt-2 pl-4 border-l-2 border-gray-700">
+                            {agent.models.slice(0, 3).map((model: any) => (
+                              <div key={model.model} className="flex items-center justify-between text-xs py-1">
+                                <span className="text-gray-500 truncate max-w-[120px]">{model.model}</span>
+                                <span className="text-gray-600">{model.totalTokens.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {(!usageData?.agents || usageData.agents.length === 0) && (
+                      <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* By Model */}
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <h3 className="text-white font-semibold mb-4">按模型分组</h3>
+                  <div className="space-y-3">
+                    {(usageData?.models || []).map((model: any) => (
+                      <div key={`${model.provider}:${model.model}`} className="bg-gray-800/50 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <Cpu className="w-4 h-4 text-green-400" />
+                            <span className="text-white text-sm font-medium truncate max-w-[160px]">{model.model}</span>
+                            <span className="text-xs text-gray-500">({model.provider})</span>
+                          </div>
+                          <span className="text-xs text-gray-500">{model.sessionCount} 会话</span>
+                        </div>
+                        {/* Token bar */}
+                        <div className="h-2 bg-gray-700 rounded-full overflow-hidden mb-2">
+                          <div 
+                            className="h-full bg-gradient-to-r from-green-500 to-emerald-400 rounded-full transition-all"
+                            style={{ width: `${usageData?.total.totalTokens ? Math.min(100, (model.totalTokens / usageData.total.totalTokens) * 100) : 0}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-400">{model.totalTokens.toLocaleString()} tokens</span>
+                          <span className="text-gray-500">${model.cost.toFixed(4)}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {(!usageData?.models || usageData.models.length === 0) && (
+                      <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Hourly Usage Line Chart */}
+              <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                <h3 className="text-white font-semibold mb-4">每小时 Token 消耗</h3>
+                {usageData?.hourly && usageData.hourly.length > 1 ? (
+                  <div className="relative h-40 w-full">
+                    <svg className="w-full h-full" viewBox="0 0 800 160" preserveAspectRatio="none">
+                      {/* Grid lines */}
+                      {[0, 40, 80, 120, 160].map((y, i) => (
+                        <line key={i} x1="40" y1={y} x2="800" y2={y} stroke="#374151" strokeWidth="1" />
+                      ))}
+                      {/* Y-axis labels */}
+                      {(() => {
+                        const maxTokens = Math.max(...(usageData?.hourly || []).map((h: any) => h.totalTokens), 1)
+                        return [0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
+                          const value = Math.round(maxTokens * ratio)
+                          const y = 160 - (ratio * 140) - 10
+                          return (
+                            <text key={i} x="35" y={y + 4} fill="#6B7280" fontSize="10" textAnchor="end">
+                              {value >= 1000 ? `${Math.round(value / 1000)}k` : value}
+                            </text>
+                          )
+                        })
+                      })()}
+                      {/* Line path */}
+                      {(() => {
+                        const hours = [...(usageData?.hourly || [])].sort((a, b) => a.hour.localeCompare(b.hour))
+                        if (hours.length < 2) return null
+                        const maxTokens = Math.max(...hours.map((h: any) => h.totalTokens), 1)
+                        const width = 760
+                        const height = 140
+                        const paddingLeft = 40
+                        const paddingTop = 10
+                        
+                        const points = hours.map((h: any, i: number) => {
+                          const x = paddingLeft + (i / (hours.length - 1)) * width
+                          const y = paddingTop + height - (h.totalTokens / maxTokens) * height
+                          return `${x},${y}`
+                        })
+                        
+                        const pathD = `M ${points.join(' L ')}`
+                        
+                        // Area fill path
+                        const areaD = `M ${paddingLeft},${paddingTop + height} L ${points.join(' L ')} L ${paddingLeft + width},${paddingTop + height} Z`
+                        
+                        return (
+                          <g>
+                            <defs>
+                              <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#8B5CF6" stopOpacity="0.4" />
+                                <stop offset="100%" stopColor="#8B5CF6" stopOpacity="0.05" />
+                              </linearGradient>
+                            </defs>
+                            {/* Area */}
+                            <path d={areaD} fill="url(#areaGradient)" />
+                            {/* Line */}
+                            <path d={pathD} fill="none" stroke="#8B5CF6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            {/* Data points */}
+                            {hours.length <= 24 && hours.map((h: any, i: number) => {
+                              const x = paddingLeft + (i / (hours.length - 1)) * width
+                              const y = paddingTop + height - (h.totalTokens / maxTokens) * height
+                              return (
+                                <circle key={i} cx={x} cy={y} r="3" fill="#8B5CF6" className="hover:r-4 transition-all">
+                                  <title>{h.hour}: {h.totalTokens.toLocaleString()} tokens</title>
+                                </circle>
+                              )
+                            })}
+                          </g>
+                        )
+                      })()}
+                      {/* X-axis labels */}
+                      {(() => {
+                        const hours = [...(usageData?.hourly || [])].sort((a, b) => a.hour.localeCompare(b.hour))
+                        if (hours.length < 2) return null
+                        const labelCount = Math.min(8, hours.length)
+                        const step = Math.floor(hours.length / labelCount)
+                        return hours.filter((_: any, i: number) => i % step === 0 || i === hours.length - 1).map((h: any, idx: number, arr: any[]) => {
+                          const originalIndex = hours.indexOf(h)
+                          const x = 40 + (originalIndex / (hours.length - 1)) * 760
+                          const label = h.hour.slice(11, 16)
+                          return (
+                            <text key={idx} x={x} y="158" fill="#6B7280" fontSize="9" textAnchor="middle">
+                              {label}
+                            </text>
+                          )
+                        })
+                      })()}
+                    </svg>
+                  </div>
+                ) : (
+                  <p className="text-gray-500 text-sm text-center py-8">暂无足够数据绘制图表</p>
+                )}
+              </div>
+
+              {/* Daily Usage */}
+              <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                <h3 className="text-white font-semibold mb-4">每日用量趋势</h3>
+                <div className="space-y-2">
+                  {(usageData?.daily || []).slice(0, 14).map((day: any) => (
+                    <div key={day.date} className="flex items-center gap-4">
+                      <span className="text-gray-500 text-sm w-24">{day.date}</span>
+                      <div className="flex-1 h-6 bg-gray-800 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-purple-500 to-pink-400 rounded-full"
+                          style={{ width: `${usageData?.daily[0]?.totalTokens ? Math.min(100, (day.totalTokens / usageData.daily[0].totalTokens) * 100) : 0}%` }}
+                        />
+                      </div>
+                      <span className="text-gray-400 text-sm w-32 text-right">{day.totalTokens.toLocaleString()} tokens</span>
+                      <span className="text-gray-500 text-sm w-20 text-right">${day.cost.toFixed(4)}</span>
+                    </div>
+                  ))}
+                  {(!usageData?.daily || usageData.daily.length === 0) && (
+                    <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Monthly Usage */}
+              <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                <h3 className="text-white font-semibold mb-4">每月用量汇总</h3>
+                {(usageData?.monthly && usageData.monthly.length > 0) ? (
+                  <>
+                    {/* Monthly summary cards */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                      {usageData.monthly.slice(0, 3).map((m: any) => (
+                        <div key={m.month} className="bg-gray-800/50 rounded-lg p-4">
+                          <div className="text-gray-400 text-sm mb-1">{m.month}</div>
+                          <div className="text-2xl font-bold text-white mb-1">{m.totalTokens.toLocaleString()}</div>
+                          <div className="text-gray-500 text-sm">tokens · ${m.cost.toFixed(2)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Monthly list */}
+                    <div className="space-y-2">
+                      {usageData.monthly.map((m: any) => (
+                        <div key={m.month} className="flex items-center gap-4">
+                          <span className="text-gray-500 text-sm w-20">{m.month}</span>
+                          <div className="flex-1 h-6 bg-gray-800 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-gradient-to-r from-green-500 to-cyan-400 rounded-full"
+                              style={{ width: `${usageData.monthly[0]?.totalTokens ? Math.min(100, (m.totalTokens / usageData.monthly[0].totalTokens) * 100) : 0}%` }}
+                            />
+                          </div>
+                          <span className="text-gray-400 text-sm w-36 text-right">{m.totalTokens.toLocaleString()} tokens</span>
+                          <span className="text-gray-500 text-sm w-24 text-right">${m.cost.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
+                )}
               </div>
             </div>
           )}
@@ -3206,58 +3496,6 @@ ${agentsForm.tools || '无'}`
               </div>
             </div>
           )}
-
-          {/* Calendar */}
-          {activeTab === 'calendar' && (
-            <div className="p-4 md:p-6 max-w-full overflow-x-auto">
-              <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 md:p-6 min-w-[320px]">
-                <div className="flex items-center justify-between mb-4 md:mb-6">
-                  <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1))} className="p-2 hover:bg-gray-800 rounded-lg"><ChevronLeft className="w-5 h-5 text-gray-400" /></button>
-                  <div className="flex items-center gap-3">
-                    <h3 className="text-base md:text-lg font-medium text-white">{calendarMonth.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long' })}</h3>
-                    <button onClick={() => setCalendarMonth(new Date())} className="px-2 md:px-3 py-1 text-xs bg-blue-500/20 text-blue-400 rounded-md hover:bg-blue-500/30">今天</button>
-                  </div>
-                  <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1))} className="p-2 hover:bg-gray-800 rounded-lg"><ChevronRight className="w-5 h-5 text-gray-400" /></button>
-                </div>
-                <div className="grid grid-cols-7 gap-1 md:gap-4 mb-4 md:mb-6">
-                  {['日', '一', '二', '三', '四', '五', '六'].map(day => <div key={day} className="text-center text-xs text-gray-500 font-medium py-1">{day}</div>)}
-                </div>
-                <div className="grid grid-cols-7 gap-1 md:gap-2">
-                  {(() => {
-                    const year = calendarMonth.getFullYear()
-                    const month = calendarMonth.getMonth()
-                    const firstDay = new Date(year, month, 1).getDay()
-                    const daysInMonth = new Date(year, month + 1, 0).getDate()
-                    const now = new Date()
-                    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-                    const cells = []
-                    for (let i = 0; i < firstDay; i++) cells.push(<div key={`empty-${i}`} />)
-                    for (let day = 1; day <= daysInMonth; day++) {
-                      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                      const dayEvents = calendarEvents.filter(e => e.date === dateStr)
-                      const isToday = dateStr === today
-                      cells.push(
-                        <div key={day} className={`p-1 md:p-2 rounded-lg min-h-[60px] md:min-h-[80px] border ${isToday ? 'bg-blue-500/10 border-blue-500/50' : 'bg-gray-850 border-gray-800'}`}>
-                          <span className={`text-xs md:text-sm font-medium ${isToday ? 'text-blue-400' : 'text-gray-300'}`}>{day}</span>
-                          <div className="mt-1 space-y-1">
-                            {dayEvents.slice(0, 2).map(event => (
-                              <div key={event.id} className="text-xs p-1 bg-gray-800 rounded truncate flex items-center gap-1">
-                                <StatusDot status={event.status} />
-                                <span className="truncate hidden sm:block">{event.title}</span>
-                              </div>
-                            ))}
-                            {dayEvents.length > 2 && <div className="text-xs text-gray-500">+{dayEvents.length - 2}</div>}
-                          </div>
-                        </div>
-                      )
-                    }
-                    return cells
-                  })()}
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Projects */}
           {activeTab === 'projects' && (
             <div className="p-4 md:p-6">
@@ -3823,7 +4061,7 @@ ${agentsForm.tools || '无'}`
               {/* About */}
               <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 md:p-6">
                 <h3 className="text-lg font-medium text-white mb-4">关于</h3>
-                <p className="text-sm text-gray-400">{projectName || 'Mission Control'} v1.0.9</p>
+                <p className="text-sm text-gray-400">{projectName || 'Mission Control'} v1.1.0</p>
               </div>
             </div>
           )}
