@@ -2799,6 +2799,7 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'timing' && '定时任务'}
               {activeTab === 'realtime' && '实时会话'}
               {activeTab === 'models' && '模型'}
+              {activeTab === 'settings' && '设置'}
               {activeTab === 'approvals' && '权限审核'}
             </h1>
             <span className="text-sm text-gray-500">
