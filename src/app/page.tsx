@@ -2655,8 +2655,8 @@ ${agentsForm.tools || '无'}`
                 { id: 'realtime', label: '实时会话', icon: Zap },
                 { id: 'logs', label: '工具日志', icon: FileText },
                 { id: 'usage', label: '模型用量', icon: TrendingUp },
-                { id: 'settings', label: '设置', icon: Settings },
                 { id: 'approvals', label: '权限审核', icon: Shield },
+                { id: 'settings', label: '设置', icon: Settings },
               ].map(item => (
                 <button key={item.id} onClick={() => { setActiveTab(item.id as Tab); setMobileMenuOpen(false) }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 ${activeTab === item.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white'}`}>
                   <item.icon className="w-5 h-5" />{item.label}
@@ -4183,9 +4183,9 @@ ${agentsForm.tools || '无'}`
           {activeTab === 'realtime' && (
             <div className="p-4 md:p-6">
               {/* 左右布局：后台运行任务 | 实时会话 */}
-              <div className="flex gap-6 h-[calc(100vh-12rem)]">
+              <div className="flex flex-col md:flex-row gap-4 md:gap-6 md:h-[calc(100vh-12rem)]">
                 {/* 左侧：后台运行任务 */}
-                <div className="w-80 flex-shrink-0 flex flex-col">
+                <div className="w-full md:w-80 flex-shrink-0 flex flex-col max-h-[40vh] md:max-h-full overflow-hidden">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <Activity className="w-4 h-4 text-green-400" />
@@ -4328,7 +4328,7 @@ ${agentsForm.tools || '无'}`
                 </div>
 
                 {/* 右侧：实时会话 */}
-                <div className="flex-1 flex flex-col min-w-0">
+                <div className="flex-1 flex flex-col min-w-0 mt-4 md:mt-0">
                   <div className="flex items-center justify-between mb-4">
                     <h2 className="text-lg font-medium text-white">实时会话</h2>
                     <div className="flex gap-2">
