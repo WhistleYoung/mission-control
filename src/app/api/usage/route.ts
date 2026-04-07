@@ -135,6 +135,13 @@ function getAgentIds(): string[] {
   }
 }
 
+// Usage cache to avoid slow disk reads
+let usageCache: { data: any; timestamp: number } = {
+  data: null,
+  timestamp: 0
+}
+const USAGE_CACHE_TTL = 30000 // 30 seconds
+
 // Format date to Beijing time (UTC+8) hour string
 function toBeijingHour(date: Date): string {
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -222,6 +229,15 @@ export async function GET(request: NextRequest) {
       status: 401,
       headers: { 'Content-Type': 'application/json' }
     })
+  }
+
+  // Check cache first
+  const now = Date.now()
+  const searchParams = new URL(request.url).searchParams
+  const forceRefresh = searchParams.get('refresh') === 'true'
+  
+  if (!forceRefresh && usageCache.data && (now - usageCache.timestamp) < USAGE_CACHE_TTL) {
+    return NextResponse.json(usageCache.data)
   }
 
   const agentNames = getAgentNames()
@@ -488,7 +504,7 @@ export async function GET(request: NextRequest) {
   const monthly = Object.values(monthlyUsageMap)
     .sort((a, b) => b.month.localeCompare(a.month))
 
-  return NextResponse.json({
+  const result = {
     total: totalUsage,
     totalSessions,
     agents,
@@ -496,5 +512,10 @@ export async function GET(request: NextRequest) {
     daily,
     hourly,
     monthly
-  })
+  }
+  
+  // Update cache
+  usageCache = { data: result, timestamp: now }
+
+  return NextResponse.json(result)
 }

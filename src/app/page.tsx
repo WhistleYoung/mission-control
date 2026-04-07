@@ -1977,7 +1977,7 @@ export default function MissionControl() {
   }
 
   // Fast fetch with timeout - optimized for speed
-  const fastFetch = async (url: string, timeout = 5000) => {
+  const fastFetch = async (url: string, timeout = 20000) => {
     try {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), timeout)

@@ -8,6 +8,13 @@ import type { NextRequest } from 'next/server'
 
 const AGENTS_DIR = '/home/bullrom/.openclaw/agents'
 
+// Sessions cache to avoid slow disk reads
+let sessionsCache: { sessions: any[]; timestamp: number } = {
+  sessions: [],
+  timestamp: 0
+}
+const SESSIONS_CACHE_TTL = 10000 // 10 seconds
+
 // Agent name mapping from openclaw.json
 function getAgentName(agentId: string): string {
   const names = getAgentNames()
@@ -30,9 +37,17 @@ function isRealConversationMessage(event: any): boolean {
   return typeof content === 'string' && content.length > 0
 }
 
-// Check if session is a cron/heartbeat session
+// Check if session is a cron/heartbeat session - optimized to only read first few lines
 function isCronSession(filePath: string): boolean {
-  const content = readFileSync(filePath, 'utf-8')
+  // Only read first 2KB of file to check for cron patterns (much faster)
+  const fd = require('fs').openSync(filePath, 'r')
+  const buffer = Buffer.alloc(2048)
+  const bytesRead = require('fs').readSync(fd, buffer, 0, 2048, 0)
+  require('fs').closeSync(fd)
+  
+  if (bytesRead === 0) return false
+  
+  const content = buffer.toString('utf-8', 0, bytesRead)
   const lines = content.split('\n').filter(l => l.trim())
   
   // Check first few lines for cron patterns
@@ -244,8 +259,22 @@ export async function GET(request: NextRequest) {
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
 
+  // Check cache first
+  const now = Date.now()
+  const searchParams = new URL(request.url).searchParams
+  const forceRefresh = searchParams.get('refresh') === 'true'
+  
+  if (!forceRefresh && sessionsCache.timestamp && (now - sessionsCache.timestamp) < SESSIONS_CACHE_TTL) {
+    let sessions = sessionsCache.sessions
+    // Still apply filters if needed
+    const agentId = searchParams.get('agentId')
+    const projectId = searchParams.get('projectId')
+    if (agentId) sessions = sessions.filter(s => s.agentId === agentId)
+    if (projectId) sessions = sessions.filter(s => s.projectId === Number(projectId))
+    return NextResponse.json(sessions)
+  }
+
   try {
-    const { searchParams } = new URL(request.url)
     const agentId = searchParams.get('agentId')
     const projectId = searchParams.get('projectId')
     
@@ -339,6 +368,9 @@ export async function GET(request: NextRequest) {
     
     // Sort by last message time
     sessions.sort((a, b) => new Date(b.lastMessage).getTime() - new Date(a.lastMessage).getTime())
+    
+    // Update cache
+    sessionsCache = { sessions, timestamp: now }
     
     return NextResponse.json(sessions)
   } catch (error) {
