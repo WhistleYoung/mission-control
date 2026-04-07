@@ -1397,7 +1397,7 @@ export default function MissionControl() {
                 </div>
                 <div className="border-t border-gray-800 pt-6">
                   <h3 className="text-lg font-medium text-white mb-4">关于</h3>
-                  <p className="text-sm text-gray-400">Mission Control v1.0.0</p>
+                  <p className="text-sm text-gray-400">Mission Control v1.1.1</p>
                 </div>
               </div>
             </div>

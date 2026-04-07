@@ -4784,3 +4784,18 @@ Use --update-env to update environment variables
 [2026-04-07 21:10:02] ⚠️ star-office (port 19000) is down, restarting...
 /home/bullrom/mission-control/healthcheck.sh: line 16: pm2: command not found
 [2026-04-07 21:10:05] ❌ star-office restart failed
+[2026-04-07 21:15:02] ✅ mission-control is healthy
+[2026-04-07 21:15:02] ❌ star-office is not responding on port 19000
+[2026-04-07 21:15:02] ⚠️ star-office (port 19000) is down, restarting...
+/home/bullrom/mission-control/healthcheck.sh: line 16: pm2: command not found
+[2026-04-07 21:15:05] ❌ star-office restart failed
+[2026-04-07 21:20:01] ✅ mission-control is healthy
+[2026-04-07 21:20:01] ❌ star-office is not responding on port 19000
+[2026-04-07 21:20:01] ⚠️ star-office (port 19000) is down, restarting...
+/home/bullrom/mission-control/healthcheck.sh: line 16: pm2: command not found
+[2026-04-07 21:20:04] ❌ star-office restart failed
+[2026-04-07 21:25:01] ✅ mission-control is healthy
+[2026-04-07 21:25:01] ❌ star-office is not responding on port 19000
+[2026-04-07 21:25:01] ⚠️ star-office (port 19000) is down, restarting...
+/home/bullrom/mission-control/healthcheck.sh: line 16: pm2: command not found
+[2026-04-07 21:25:04] ❌ star-office restart failed
