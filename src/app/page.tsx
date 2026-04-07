@@ -4494,8 +4494,8 @@ ${agentsForm.tools || '无'}`
                 </div>
               </div>
               <div className="bg-gray-900/50 rounded-xl border border-gray-800 overflow-hidden">
-                <div className="max-h-[calc(100vh-300px)] overflow-y-auto">
-                  <table className="w-full text-sm">
+                <div className="max-h-[calc(100vh-250px)] md:max-h-[calc(100vh-300px)] overflow-x-auto md:overflow-y-auto">
+                  <table className="w-full text-sm min-w-[600px]">
                     <thead className="bg-gray-800 text-gray-400 sticky top-0">
                       <tr>
                         <th className="text-left px-4 py-2 w-36">时间</th>
@@ -4504,7 +4504,7 @@ ${agentsForm.tools || '无'}`
                         <th className="text-left px-4 py-2">消息</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-800">
+                    <tbody className="divide-y divide-gray-800 md:table-row-group">
                       {[...logs].reverse().map((log, i) => (
                         <tr key={i} className="hover:bg-gray-800/50">
                           <td className="px-4 py-2 text-gray-400 font-mono text-xs whitespace-nowrap">
