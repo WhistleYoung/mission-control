@@ -2,7 +2,11 @@ import { NextResponse } from 'next/server'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { getAgentNames } from '@/lib/agent-config'
 import { gatewayCall } from '@/lib/gateway-rpc'
+import { db } from '@/lib/db'
 import type { NextRequest } from 'next/server'
+
+// Cache TTL - 5 minutes
+const CACHE_TTL = 300000
 
 interface RealtimeTask {
   sessionKey: string
@@ -19,17 +23,11 @@ interface RealtimeTask {
   isMainAgent?: boolean
 }
 
-// In-memory cache to avoid slow CLI calls
 let taskCache: { tasks: RealtimeTask[]; timestamp: number } = {
   tasks: [],
   timestamp: 0
 }
-const CACHE_TTL = 300000 // 5 minutes - return cached immediately
 
-/**
- * Get active/realtime tasks from OpenClaw Gateway via CLI
- * Uses 5-second cache to avoid slow CLI calls blocking page load
- */
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
@@ -39,7 +37,7 @@ export async function GET(request: NextRequest) {
   const searchParams = new URL(request.url).searchParams
   const forceRefresh = searchParams.get('refresh') === 'true'
 
-  // Return cached data if still fresh (and not forcing refresh)
+  // Return cached data if still fresh
   if (!forceRefresh && taskCache.timestamp && (now - taskCache.timestamp) < CACHE_TTL) {
     return NextResponse.json({ 
       tasks: taskCache.tasks,
@@ -48,112 +46,170 @@ export async function GET(request: NextRequest) {
     })
   }
 
+  // Try to read from database cache first
+  if (!forceRefresh) {
+    try {
+      const cached = db.prepare('SELECT * FROM realtime_tasks_cache').all() as any[]
+      if (cached && cached.length > 0) {
+        const meta = db.prepare('SELECT last_sync_at FROM realtime_tasks_sync_meta ORDER BY id DESC LIMIT 1').get() as any
+        const age = meta?.last_sync_at ? now - new Date(meta.last_sync_at).getTime() : 0
+        
+        if (age < CACHE_TTL) {
+          const tasks: RealtimeTask[] = cached.map(c => ({
+            sessionKey: c.session_key,
+            agentId: c.agent_id,
+            agentName: c.agent_name,
+            model: c.model,
+            status: c.status,
+            task: c.task,
+            startedAt: c.started_at,
+            lastActive: c.last_active,
+            isSubagent: !!c.is_subagent,
+            isMainAgent: !!c.is_main_agent
+          }))
+          
+          // Trigger background refresh
+          refreshCacheInBackground()
+          
+          return NextResponse.json({ tasks, cached: true, age })
+        }
+      }
+    } catch (e) {
+      console.error('Failed to read tasks from cache:', e)
+    }
+  }
+
+  // Fetch fresh data from gateway
   try {
-    // Use WebSocket RPC instead of CLI - much faster and more reliable
-    const result = await gatewayCall('sessions.list', {})
+    const result = await gatewayCall('sessions.list', {}) as any[]
+    
+    if (!Array.isArray(result)) {
+      throw new Error('Invalid result from gateway')
+    }
+
+    const agentNames = getAgentNames()
     const tasks: RealtimeTask[] = []
     
-    // Agent name mapping from openclaw.json
-    const agentNames = getAgentNames()
-    
-    const sessions = result.sessions || []
-    for (const session of sessions) {
-      const sessionKey = session.key || session.sessionId || ''
+    for (const session of result) {
+      const status = session.status?.toLowerCase()
+      if (status !== 'running' && status !== 'active') continue
       
-      // Extract agentId from session key: "agent:main:dingtalk-connector:direct:xxx"
-      const keyParts = sessionKey.split(':')
-      const agentId = keyParts[1] || keyParts[0] || 'unknown'
-      
-      // Skip cron, heartbeat and openai system sessions
-      if (sessionKey.includes('heartbeat') || sessionKey.includes('cron') || sessionKey.includes('openai:')) {
-        continue
-      }
-      
-      // Determine if this is a subagent or main agent
-      const isSubagent = sessionKey.includes(':subagent:')
-      
-      // Get display name or origin label as task description
-      let task = session.displayName || session.summary || ''
+      const agentId = session.agentId || session.agent?.id || 'unknown'
       
       tasks.push({
-        sessionKey,
-        sessionId: session.sessionId,
+        sessionKey: session.sessionKey || session.id || '',
+        sessionId: session.sessionId || session.id,
         agentId,
-        agentName: agentNames[agentId] || agentId,
-        model: session.model ? `${session.modelProvider}/${session.model}` : '',
-        status: session.status === 'running' ? 'running' : (session.status === 'failed' ? 'error' : 'idle'),
-        task: task.substring(0, 100),
-        startedAt: session.startedAt ? new Date(session.startedAt).toISOString() : undefined,
-        lastActive: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
+        agentName: agentNames[agentId] || session.agent?.name || agentId,
+        model: session.model || session.agent?.model,
+        status: status === 'running' ? 'running' : 'idle',
+        task: session.task || session.currentTask || '',
+        startedAt: session.startedAt || session.started_at,
+        lastActive: session.lastActive || session.last_active,
         childSessions: session.childSessions || [],
-        isSubagent,
-        isMainAgent: !isSubagent,
+        isSubagent: session.isSubagent || session.is_subagent,
+        isMainAgent: session.isMainAgent || session.is_main_agent
       })
     }
-    
+
+    // Sort: main agents first, then by last active
+    tasks.sort((a, b) => {
+      if (a.isMainAgent && !b.isMainAgent) return -1
+      if (!a.isMainAgent && b.isMainAgent) return 1
+      return 0
+    })
+
     // Update cache
     taskCache = { tasks, timestamp: now }
     
+    // Trigger background sync to database
+    syncToDatabase(tasks)
+
     return NextResponse.json({ tasks, cached: false, age: 0 })
   } catch (error) {
     console.error('Failed to fetch realtime tasks:', error)
+    
     // Return cached data on error if available
     if (taskCache.tasks.length > 0) {
       return NextResponse.json({ 
-        tasks: taskCache.tasks, 
+        tasks: taskCache.tasks,
         cached: true,
-        error: '使用缓存数据',
-        age: now - taskCache.timestamp
+        age: now - taskCache.timestamp,
+        error: 'Using stale cache'
       })
     }
-    return NextResponse.json({ error: '获取实时任务失败', tasks: [] }, { status: 500 })
+    
+    return NextResponse.json({ 
+      tasks: [],
+      cached: false,
+      error: String(error)
+    }, { status: 500 })
   }
 }
 
-/**
- * Abort a realtime task (subagent or idle session)
- * Main agent sessions cannot be killed
- */
+function syncToDatabase(tasks: RealtimeTask[]) {
+  try {
+    db.exec('DELETE FROM realtime_tasks_cache')
+    
+    const insert = db.prepare(`
+      INSERT INTO realtime_tasks_cache 
+      (session_key, agent_id, agent_name, model, status, task, started_at, last_active, is_subagent, is_main_agent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    
+    const insertMany = db.transaction((ts: RealtimeTask[]) => {
+      for (const t of ts) {
+        insert.run(t.sessionKey, t.agentId, t.agentName, t.model || '', t.status, 
+                   t.task || '', t.startedAt || '', t.lastActive || '', 
+                   t.isSubagent ? 1 : 0, t.isMainAgent ? 1 : 0)
+      }
+    })
+    
+    insertMany(tasks)
+    db.prepare('INSERT INTO realtime_tasks_sync_meta (last_sync_at) VALUES (CURRENT_TIMESTAMP)').run()
+  } catch (e) {
+    console.error('Failed to sync tasks to database:', e)
+  }
+}
+
+function refreshCacheInBackground() {
+  // Fire and forget - will update cache for next request
+  fetch(new URL('/api/sync', 'http://localhost:10086'), { method: 'POST' }).catch(() => {})
+}
+
+// DELETE - Kill a session
 export async function DELETE(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
 
   try {
-    const { searchParams } = new URL(request.url)
-    const sessionKey = searchParams.get('sessionKey')
-
+    const { sessionKey } = await request.json()
+    
     if (!sessionKey) {
-      return NextResponse.json({ error: '缺少 sessionKey 参数' }, { status: 400 })
+      return NextResponse.json({ error: '缺少 sessionKey' }, { status: 400 })
     }
 
-    // Check if this is a main agent session (not a subagent)
-    // Main agent sessions contain ':cron:', ':heartbeat:' or are direct sessions without 'subagent'
-    const isMainAgent = !sessionKey.includes(':subagent:') || 
-                        sessionKey.includes(':cron:') || 
-                        sessionKey.includes(':heartbeat:')
-
-    if (isMainAgent) {
+    // Check if this is a main agent
+    const cached = db.prepare('SELECT * FROM realtime_tasks_cache WHERE session_key = ?').get(sessionKey) as any
+    if (cached?.is_main_agent) {
       return NextResponse.json({ 
-        error: '主 Agent 进程无法被杀死',
-        reason: 'main_agent_protected'
+        error: '无法删除主 Agent 进程',
+        code: 'MAIN_AGENT_PROTECTED'
       }, { status: 403 })
     }
 
-    // Delete the session via Gateway WebSocket RPC
-    const result = await gatewayCall('sessions.delete', { key: sessionKey })
+    await gatewayCall('sessions.delete', { key: sessionKey })
+    
+    // Update cache
+    taskCache.tasks = taskCache.tasks.filter(t => t.sessionKey !== sessionKey)
+    
+    // Update database
+    db.prepare('DELETE FROM realtime_tasks_cache WHERE session_key = ?').run(sessionKey)
 
-    return NextResponse.json({ 
-      ok: true, 
-      sessionKey,
-      message: '任务已删除',
-      archived: result.archived
-    })
-  } catch (error: any) {
-    console.error('Failed to abort task:', error)
-    return NextResponse.json({ 
-      error: '终止任务失败',
-      details: error.message 
-    }, { status: 500 })
+    return NextResponse.json({ ok: true, sessionKey, message: '任务已删除' })
+  } catch (error) {
+    console.error('Failed to delete session:', error)
+    return NextResponse.json({ error: String(error) }, { status: 500 })
   }
 }

@@ -158,6 +158,51 @@ function initializeDatabase() {
       last_sync_at DATETIME,
       last_file_mtime TEXT
     );
+
+    -- Sessions cache table
+    CREATE TABLE IF NOT EXISTS sessions_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT UNIQUE NOT NULL,
+      agent_id TEXT,
+      agent_name TEXT,
+      title TEXT,
+      summary TEXT,
+      last_message TEXT,
+      last_message_time TEXT,
+      project_id INTEGER,
+      custom_tags TEXT,
+      message_count INTEGER DEFAULT 0,
+      is_cron INTEGER DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Sessions sync metadata
+    CREATE TABLE IF NOT EXISTS sessions_sync_meta (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      last_sync_at DATETIME
+    );
+
+    -- Realtime tasks cache table
+    CREATE TABLE IF NOT EXISTS realtime_tasks_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_key TEXT UNIQUE NOT NULL,
+      agent_id TEXT,
+      agent_name TEXT,
+      model TEXT,
+      status TEXT,
+      task TEXT,
+      started_at TEXT,
+      last_active TEXT,
+      is_subagent INTEGER DEFAULT 0,
+      is_main_agent INTEGER DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Realtime tasks sync metadata
+    CREATE TABLE IF NOT EXISTS realtime_tasks_sync_meta (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      last_sync_at DATETIME
+    );
   `)
 
   // Create default admin user if not exists
