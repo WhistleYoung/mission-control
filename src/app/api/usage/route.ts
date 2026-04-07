@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { verifyAuth } from '@/lib/auth'
 import { getAgentNames } from '@/lib/agent-config'
+import { db } from '@/lib/db'
 
 const AGENTS_DIR = '/home/bullrom/.openclaw/agents'
 const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
@@ -25,105 +26,218 @@ function getAllConfiguredModels(): Array<{id: string, provider: string}> {
   }
 }
 
-interface UsageData {
-  inputTokens: number
-  outputTokens: number
-  cacheRead: number
-  cacheWrite: number
-  totalTokens: number
-  cost: number
-}
-
-interface ModelUsage {
-  model: string
-  provider: string
-  inputTokens: number
-  outputTokens: number
-  cacheRead: number
-  cacheWrite: number
-  totalTokens: number
-  cost: number
-  sessionCount: number
-}
-
-interface AgentUsage {
-  agentId: string
-  agentName: string
-  inputTokens: number
-  outputTokens: number
-  cacheRead: number
-  cacheWrite: number
-  totalTokens: number
-  cost: number
-  sessionCount: number
-  models: Record<string, ModelUsage>
-}
-
-interface DailyUsage {
-  date: string
-  inputTokens: number
-  outputTokens: number
-  cacheRead: number
-  cacheWrite: number
-  totalTokens: number
-  cost: number
-  sessionCount: number
-}
-
-interface HourlyUsage {
-  hour: string  // Format: "YYYY-MM-DD HH:00"
-  inputTokens: number
-  outputTokens: number
-  cacheRead: number
-  cacheWrite: number
-  totalTokens: number
-  cost: number
-  sessionCount: number
-}
-
-interface MonthlyUsage {
-  month: string  // Format: "YYYY-MM"
-  inputTokens: number
-  outputTokens: number
-  cacheRead: number
-  cacheWrite: number
-  totalTokens: number
-  cost: number
-  sessionCount: number
-}
-
-// Parse usage from message event
-function parseUsage(message: any): UsageData | null {
-  if (!message?.usage) return null
-  
-  const usage = message.usage
-  return {
-    inputTokens: usage.input || 0,
-    outputTokens: usage.output || 0,
-    cacheRead: usage.cacheRead || 0,
-    cacheWrite: usage.cacheWrite || 0,
-    totalTokens: usage.totalTokens || 0,
-    cost: usage.cost?.total || 0
+// Read usage from database (fast path)
+function readUsageFromDB() {
+  try {
+    const agentNames = getAgentNames()
+    const agentIds = getAgentIds()
+    
+    // Get all configured models
+    const configuredModels = getAllConfiguredModels()
+    
+    // Get daily stats from DB
+    const dailyStats = db.prepare(`
+      SELECT stat_date as date,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY stat_date
+      ORDER BY stat_date DESC
+    `).all() as any[]
+    
+    // Get hourly stats from DB (last 24 hours)
+    const hourlyStats = db.prepare(`
+      SELECT stat_hour as hour,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY stat_hour
+      ORDER BY stat_hour DESC
+      LIMIT 24
+    `).all() as any[]
+    
+    // Get monthly stats from DB
+    const monthlyStats = db.prepare(`
+      SELECT substr(stat_date, 1, 7) as month,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY substr(stat_date, 1, 7)
+      ORDER BY month DESC
+    `).all() as any[]
+    
+    // Get agent stats from DB
+    const agentStatsRaw = db.prepare(`
+      SELECT agent_id as agentId, agent_name as agentName,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY agent_id
+    `).all() as any[]
+    
+    // Get model stats from DB
+    const modelStatsRaw = db.prepare(`
+      SELECT model, provider,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY model, provider
+    `).all() as any[]
+    
+    // Get total sessions count
+    const totalSessionsResult = db.prepare(`
+      SELECT SUM(session_count) as total FROM usage_stats
+    `).get() as any
+    const totalSessions = totalSessionsResult?.total || 0
+    
+    // Build totals
+    const totalResult = db.prepare(`
+      SELECT 
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost
+      FROM usage_stats
+    `).get() as any
+    
+    const total = {
+      inputTokens: totalResult?.inputTokens || 0,
+      outputTokens: totalResult?.outputTokens || 0,
+      cacheRead: totalResult?.cacheRead || 0,
+      cacheWrite: totalResult?.cacheWrite || 0,
+      totalTokens: totalResult?.totalTokens || 0,
+      cost: totalResult?.cost || 0
+    }
+    
+    // Build agent map with models
+    const agentMap: Record<string, any> = {}
+    for (const stats of agentStatsRaw) {
+      agentMap[stats.agentId] = {
+        ...stats,
+        models: {}
+      }
+    }
+    
+    // Get agent model breakdown from DB
+    const agentModelStats = db.prepare(`
+      SELECT agent_id, model, provider,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY agent_id, model, provider
+    `).all() as any[]
+    
+    for (const stats of agentModelStats) {
+      if (agentMap[stats.agent_id]) {
+        const key = `${stats.provider}:${stats.model}`
+        agentMap[stats.agent_id].models[key] = {
+          model: stats.model,
+          provider: stats.provider,
+          inputTokens: stats.inputTokens,
+          outputTokens: stats.outputTokens,
+          cacheRead: stats.cacheRead,
+          cacheWrite: stats.cacheWrite,
+          totalTokens: stats.totalTokens,
+          cost: stats.cost,
+          sessionCount: stats.sessionCount
+        }
+      }
+    }
+    
+    // Build model map
+    const modelMap: Record<string, any> = {}
+    
+    // Add configured models with 0 values
+    for (const cm of configuredModels) {
+      const key = `${cm.provider}:${cm.id}`
+      modelMap[key] = {
+        model: cm.id,
+        provider: cm.provider,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: 0,
+        sessionCount: 0
+      }
+    }
+    
+    // Override with actual values
+    for (const stats of modelStatsRaw) {
+      const key = `${stats.provider}:${stats.model}`
+      modelMap[key] = {
+        model: stats.model,
+        provider: stats.provider,
+        inputTokens: stats.inputTokens,
+        outputTokens: stats.outputTokens,
+        cacheRead: stats.cacheRead,
+        cacheWrite: stats.cacheWrite,
+        totalTokens: stats.totalTokens,
+        cost: stats.cost,
+        sessionCount: stats.sessionCount
+      }
+    }
+    
+    // Sort agents by total tokens
+    const agents = Object.values(agentMap)
+      .sort((a, b) => b.totalTokens - a.totalTokens)
+      .map((a: any) => ({
+        ...a,
+        models: Object.values(a.models).sort((m1: any, m2: any) => m2.totalTokens - m1.totalTokens)
+      }))
+    
+    // Sort models by total tokens
+    const models = Object.values(modelMap).sort((a: any, b: any) => b.totalTokens - a.totalTokens)
+    
+    return {
+      total,
+      totalSessions,
+      agents,
+      models,
+      daily: dailyStats,
+      hourly: hourlyStats,
+      monthly: monthlyStats,
+      fromCache: true
+    }
+  } catch (error) {
+    console.error('Failed to read from DB:', error)
+    return null
   }
 }
 
-// Get provider from API name
-function getProvider(api: string, modelId: string): string {
-  if (api === 'anthropic-messages' || api === 'anthropic-completions') {
-    if (modelId.includes('claude')) return 'anthropic'
-    return 'minimax'
-  }
-  if (api === 'openai-completions' || api === 'openai-responses') {
-    if (modelId.includes('gpt')) return 'openai'
-    if (modelId.includes('gemini')) return 'google'
-    if (modelId.includes('minimax') || modelId.includes('m2')) return 'minimax'
-    if (modelId.includes('qwen') || modelId.includes('qwq')) return 'qwen'
-    if (modelId.includes('deepseek')) return 'deepseek'
-  }
-  return 'unknown'
-}
-
-// Get all agent IDs from directory structure
 function getAgentIds(): string[] {
   try {
     return readdirSync(AGENTS_DIR).filter(name => {
@@ -133,91 +247,6 @@ function getAgentIds(): string[] {
   } catch {
     return []
   }
-}
-
-// Usage cache to avoid slow disk reads
-let usageCache: { data: any; timestamp: number } = {
-  data: null,
-  timestamp: 0
-}
-const USAGE_CACHE_TTL = 30000 // 30 seconds
-
-// Format date to Beijing time (UTC+8) hour string
-function toBeijingHour(date: Date): string {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    hour12: false
-  })
-  const parts = formatter.formatToParts(date)
-  const get = (type: string) => parts.find(p => p.type === type)?.value || ''
-  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:00`
-}
-
-// Message-level usage entry with timestamp
-interface UsageEntry {
-  usage: UsageData
-  model: string
-  provider: string
-  hour: string  // "YYYY-MM-DD HH:00" (Beijing time)
-}
-
-// Process a single session file - returns all usage entries with timestamps
-function processSessionFile(filePath: string, agentId: string): UsageEntry[] {
-  const entries: UsageEntry[] = []
-  
-  try {
-    const content = readFileSync(filePath, 'utf-8')
-    const lines = content.split('\n').filter(l => l.trim())
-    
-    let lastModel = 'unknown'
-    let lastProvider = 'unknown'
-    
-    for (const line of lines) {
-      try {
-        const event = JSON.parse(line)
-        
-        // Track model changes
-        if (event.type === 'model_change') {
-          lastModel = event.modelId || 'unknown'
-          lastProvider = event.provider || getProvider('unknown', lastModel)
-        }
-        
-        // Extract usage from messages
-        if (event.type === 'message' && event.message?.usage) {
-          const usage = parseUsage(event.message)
-          if (usage && usage.totalTokens > 0) {
-            // Get timestamp for hourly aggregation (Beijing time)
-            const timestamp = event.timestamp || event.message.timestamp
-            let hour = toBeijingHour(new Date())
-            if (timestamp) {
-              const d = new Date(timestamp)
-              hour = toBeijingHour(d)
-            }
-            
-            // Update model info from message
-            let model = lastModel
-            let provider = lastProvider
-            if (event.message.model) {
-              model = event.message.model
-            }
-            if (event.message.provider) {
-              provider = event.message.provider
-            } else {
-              provider = getProvider(event.message.api || 'unknown', model)
-            }
-            
-            entries.push({ usage, model, provider, hour })
-          }
-        }
-      } catch {}
-    }
-  } catch {}
-  
-  return entries
 }
 
 // GET /api/usage
@@ -231,25 +260,31 @@ export async function GET(request: NextRequest) {
     })
   }
 
-  // Check cache first
-  const now = Date.now()
   const searchParams = new URL(request.url).searchParams
   const forceRefresh = searchParams.get('refresh') === 'true'
   
-  if (!forceRefresh && usageCache.data && (now - usageCache.timestamp) < USAGE_CACHE_TTL) {
-    return NextResponse.json(usageCache.data)
+  // Try to read from database first (fast path)
+  if (!forceRefresh) {
+    const cachedData = readUsageFromDB()
+    if (cachedData && cachedData.totalSessions > 0) {
+      return NextResponse.json(cachedData)
+    }
   }
-
+  
+  // Fallback: calculate from files (slow path)
+  // This will be triggered on first request or force refresh
+  // In production, you should call /api/usage-sync first, then return cached data
+  
   const agentNames = getAgentNames()
   const agentIds = getAgentIds()
   
-  const agentUsageMap: Record<string, AgentUsage> = {}
-  const modelUsageMap: Record<string, ModelUsage> = {}
-  const dailyUsageMap: Record<string, DailyUsage> = {}
-  const hourlyUsageMap: Record<string, HourlyUsage> = {}
-  const monthlyUsageMap: Record<string, MonthlyUsage> = {}
+  const agentUsageMap: Record<string, any> = {}
+  const modelUsageMap: Record<string, any> = {}
+  const dailyUsageMap: Record<string, any> = {}
+  const hourlyUsageMap: Record<string, any> = {}
+  const monthlyUsageMap: Record<string, any> = {}
   
-  let totalUsage: UsageData = {
+  let totalUsage: any = {
     inputTokens: 0,
     outputTokens: 0,
     cacheRead: 0,
@@ -259,7 +294,7 @@ export async function GET(request: NextRequest) {
   }
   
   let totalSessions = 0
-
+  
   // Process each agent's sessions
   for (const agentId of agentIds) {
     const sessionsPath = join(AGENTS_DIR, agentId, 'sessions')
@@ -284,196 +319,222 @@ export async function GET(request: NextRequest) {
       
       for (const file of jsonlFiles) {
         const filePath = join(sessionsPath, file)
-        const entries = processSessionFile(filePath, agentId)
         
-        if (entries.length > 0) {
-          totalSessions++
+        try {
+          const content = readFileSync(filePath, 'utf-8')
+          const lines = content.split('\n').filter(l => l.trim())
           
-          // Track if we've counted this session for agent
-          let agentSessionCounted = false
+          let lastModel = 'unknown'
+          let lastProvider = 'unknown'
+          let sessionHasUsage = false
           
-          for (const entry of entries) {
-            const { usage, model, provider, hour } = entry
-            
-            // Update agent totals
-            const agentUsage = agentUsageMap[agentId]
-            if (!agentSessionCounted) {
-              agentUsage.sessionCount++
-              agentSessionCounted = true
-            }
-            agentUsage.inputTokens += usage.inputTokens
-            agentUsage.outputTokens += usage.outputTokens
-            agentUsage.cacheRead += usage.cacheRead
-            agentUsage.cacheWrite += usage.cacheWrite
-            agentUsage.totalTokens += usage.totalTokens
-            agentUsage.cost += usage.cost
-            
-            // Update model key (provider:model)
-            const modelKey = `${provider}:${model}`
-            if (!agentUsage.models[modelKey]) {
-              agentUsage.models[modelKey] = {
-                model,
-                provider,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: 0,
-                sessionCount: 0
+          for (const line of lines) {
+            try {
+              const event = JSON.parse(line)
+              
+              if (event.type === 'model_change') {
+                lastModel = event.modelId || 'unknown'
+                lastProvider = event.provider || getProvider('unknown', lastModel)
               }
-            }
-            const modelUsage = agentUsage.models[modelKey]
-            modelUsage.inputTokens += usage.inputTokens
-            modelUsage.outputTokens += usage.outputTokens
-            modelUsage.cacheRead += usage.cacheRead
-            modelUsage.cacheWrite += usage.cacheWrite
-            modelUsage.totalTokens += usage.totalTokens
-            modelUsage.cost += usage.cost
-            modelUsage.sessionCount++
-            
-            // Update global model totals
-            if (!modelUsageMap[modelKey]) {
-              modelUsageMap[modelKey] = {
-                model,
-                provider,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: 0,
-                sessionCount: 0
+              
+              if (event.type === 'message' && event.message?.usage) {
+                const usage = event.message.usage
+                const inputTokens = usage.input || 0
+                const outputTokens = usage.output || 0
+                const cacheRead = usage.cacheRead || 0
+                const cacheWrite = usage.cacheWrite || 0
+                const totalTokens = usage.totalTokens || 0
+                const cost = usage.cost?.total || 0
+                
+                if (totalTokens > 0) {
+                  sessionHasUsage = true
+                  
+                  const timestamp = event.timestamp || event.message.timestamp
+                  const hour = toBeijingHour(timestamp ? new Date(timestamp) : new Date())
+                  const date = hour.slice(0, 10)
+                  const month = date.slice(0, 7)
+                  
+                  let model = lastModel
+                  let provider = lastProvider
+                  if (event.message.model) model = event.message.model
+                  if (event.message.provider) {
+                    provider = event.message.provider
+                  } else {
+                    provider = getProvider(event.message.api || 'unknown', model)
+                  }
+                  
+                  // Update agent
+                  const agentUsage = agentUsageMap[agentId]
+                  agentUsage.inputTokens += inputTokens
+                  agentUsage.outputTokens += outputTokens
+                  agentUsage.cacheRead += cacheRead
+                  agentUsage.cacheWrite += cacheWrite
+                  agentUsage.totalTokens += totalTokens
+                  agentUsage.cost += cost
+                  
+                  // Update model key
+                  const modelKey = `${provider}:${model}`
+                  if (!agentUsage.models[modelKey]) {
+                    agentUsage.models[modelKey] = {
+                      model,
+                      provider,
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      totalTokens: 0,
+                      cost: 0,
+                      sessionCount: 0
+                    }
+                  }
+                  const modelUsage = agentUsage.models[modelKey]
+                  modelUsage.inputTokens += inputTokens
+                  modelUsage.outputTokens += outputTokens
+                  modelUsage.cacheRead += cacheRead
+                  modelUsage.cacheWrite += cacheWrite
+                  modelUsage.totalTokens += totalTokens
+                  modelUsage.cost += cost
+                  
+                  // Update global model
+                  if (!modelUsageMap[modelKey]) {
+                    modelUsageMap[modelKey] = {
+                      model,
+                      provider,
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      totalTokens: 0,
+                      cost: 0,
+                      sessionCount: 0
+                    }
+                  }
+                  const globalModel = modelUsageMap[modelKey]
+                  globalModel.inputTokens += inputTokens
+                  globalModel.outputTokens += outputTokens
+                  globalModel.cacheRead += cacheRead
+                  globalModel.cacheWrite += cacheWrite
+                  globalModel.totalTokens += totalTokens
+                  globalModel.cost += cost
+                  
+                  // Update daily
+                  if (!dailyUsageMap[date]) {
+                    dailyUsageMap[date] = {
+                      date,
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      totalTokens: 0,
+                      cost: 0,
+                      sessionCount: 0
+                    }
+                  }
+                  const dailyUsage = dailyUsageMap[date]
+                  dailyUsage.inputTokens += inputTokens
+                  dailyUsage.outputTokens += outputTokens
+                  dailyUsage.cacheRead += cacheRead
+                  dailyUsage.cacheWrite += cacheWrite
+                  dailyUsage.totalTokens += totalTokens
+                  dailyUsage.cost += cost
+                  
+                  // Update hourly
+                  if (!hourlyUsageMap[hour]) {
+                    hourlyUsageMap[hour] = {
+                      hour,
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      totalTokens: 0,
+                      cost: 0,
+                      sessionCount: 0
+                    }
+                  }
+                  const hourlyUsage = hourlyUsageMap[hour]
+                  hourlyUsage.inputTokens += inputTokens
+                  hourlyUsage.outputTokens += outputTokens
+                  hourlyUsage.cacheRead += cacheRead
+                  hourlyUsage.cacheWrite += cacheWrite
+                  hourlyUsage.totalTokens += totalTokens
+                  hourlyUsage.cost += cost
+                  
+                  // Update monthly
+                  if (!monthlyUsageMap[month]) {
+                    monthlyUsageMap[month] = {
+                      month,
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      totalTokens: 0,
+                      cost: 0,
+                      sessionCount: 0
+                    }
+                  }
+                  const monthlyUsage = monthlyUsageMap[month]
+                  monthlyUsage.inputTokens += inputTokens
+                  monthlyUsage.outputTokens += outputTokens
+                  monthlyUsage.cacheRead += cacheRead
+                  monthlyUsage.cacheWrite += cacheWrite
+                  monthlyUsage.totalTokens += totalTokens
+                  monthlyUsage.cost += cost
+                  
+                  // Update totals
+                  totalUsage.inputTokens += inputTokens
+                  totalUsage.outputTokens += outputTokens
+                  totalUsage.cacheRead += cacheRead
+                  totalUsage.cacheWrite += cacheWrite
+                  totalUsage.totalTokens += totalTokens
+                  totalUsage.cost += cost
+                }
               }
-            }
-            const globalModel = modelUsageMap[modelKey]
-            globalModel.inputTokens += usage.inputTokens
-            globalModel.outputTokens += usage.outputTokens
-            globalModel.cacheRead += usage.cacheRead
-            globalModel.cacheWrite += usage.cacheWrite
-            globalModel.totalTokens += usage.totalTokens
-            globalModel.cost += usage.cost
-            globalModel.sessionCount++
-            
-            // Update daily totals
-            const date = hour.slice(0, 10)
-            if (!dailyUsageMap[date]) {
-              dailyUsageMap[date] = {
-                date,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: 0,
-                sessionCount: 0
-              }
-            }
-            const dailyUsage = dailyUsageMap[date]
-            dailyUsage.inputTokens += usage.inputTokens
-            dailyUsage.outputTokens += usage.outputTokens
-            dailyUsage.cacheRead += usage.cacheRead
-            dailyUsage.cacheWrite += usage.cacheWrite
-            dailyUsage.totalTokens += usage.totalTokens
-            dailyUsage.cost += usage.cost
-            dailyUsage.sessionCount++
-            
-            // Update hourly totals
-            if (!hourlyUsageMap[hour]) {
-              hourlyUsageMap[hour] = {
-                hour,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: 0,
-                sessionCount: 0
-              }
-            }
-            const hourlyUsage = hourlyUsageMap[hour]
-            hourlyUsage.inputTokens += usage.inputTokens
-            hourlyUsage.outputTokens += usage.outputTokens
-            hourlyUsage.cacheRead += usage.cacheRead
-            hourlyUsage.cacheWrite += usage.cacheWrite
-            hourlyUsage.totalTokens += usage.totalTokens
-            hourlyUsage.cost += usage.cost
-            hourlyUsage.sessionCount++
-
-            // Update monthly totals
-            const month = hour.slice(0, 7)
-            if (!monthlyUsageMap[month]) {
-              monthlyUsageMap[month] = {
-                month,
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: 0,
-                sessionCount: 0
-              }
-            }
-            const monthlyUsage = monthlyUsageMap[month]
-            monthlyUsage.inputTokens += usage.inputTokens
-            monthlyUsage.outputTokens += usage.outputTokens
-            monthlyUsage.cacheRead += usage.cacheRead
-            monthlyUsage.cacheWrite += usage.cacheWrite
-            monthlyUsage.totalTokens += usage.totalTokens
-            monthlyUsage.cost += usage.cost
-            monthlyUsage.sessionCount++
-            
-            // Update totals
-            totalUsage.inputTokens += usage.inputTokens
-            totalUsage.outputTokens += usage.outputTokens
-            totalUsage.cacheRead += usage.cacheRead
-            totalUsage.cacheWrite += usage.cacheWrite
-            totalUsage.totalTokens += usage.totalTokens
-            totalUsage.cost += usage.cost
+            } catch {}
           }
-        }
+          
+          if (sessionHasUsage) {
+            agentUsageMap[agentId].sessionCount++
+            totalSessions++
+          }
+        } catch {}
       }
     } catch {}
   }
   
-  // Sort agents by total tokens (show ALL agents including 0 usage)
+  // Get configured models for padding
+  const configuredModels = getAllConfiguredModels()
+  
+  // Sort agents by total tokens
   const agents = Object.values(agentUsageMap)
-    .sort((a, b) => b.totalTokens - a.totalTokens)
-    .map(a => ({
+    .sort((a: any, b: any) => b.totalTokens - a.totalTokens)
+    .map((a: any) => ({
       ...a,
-      models: Object.values(a.models).sort((m1, m2) => m2.totalTokens - m1.totalTokens)
+      models: Object.values(a.models).sort((m1: any, m2: any) => m2.totalTokens - m1.totalTokens)
     }))
   
-  // Get all configured models + merge with actual usage data
-  const configuredModels = getAllConfiguredModels()
-  const allModelsMap: Record<string, ModelUsage> = {}
-  
-  // First add all configured models with 0 usage
+  // Build model list with padding for unused models
+  const modelMap: Record<string, any> = {}
   for (const cm of configuredModels) {
     const key = `${cm.provider}:${cm.id}`
-    if (!allModelsMap[key]) {
-      allModelsMap[key] = {
-        model: cm.id,
-        provider: cm.provider,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: 0,
-        sessionCount: 0
-      }
+    modelMap[key] = {
+      model: cm.id,
+      provider: cm.provider,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: 0,
+      sessionCount: 0
     }
   }
-  // Then merge actual usage data (overwrites zeros if model was used)
   for (const [key, model] of Object.entries(modelUsageMap)) {
-    allModelsMap[key] = model
+    modelMap[key] = model
   }
-  const models = Object.values(allModelsMap).sort((a, b) => b.totalTokens - a.totalTokens)
+  const models = Object.values(modelMap).sort((a: any, b: any) => b.totalTokens - a.totalTokens)
   
-  // Daily: pad to exactly 10 days including dates with 0 usage
+  // Daily: pad to 10 days
   const today = new Date()
-  const todayStr = today.toISOString().slice(0, 10)
   const tenDays: string[] = []
   for (let i = 9; i >= 0; i--) {
     const d = new Date(today)
@@ -497,12 +558,12 @@ export async function GET(request: NextRequest) {
   
   // Sort hourly by hour descending, take last 24 hours
   const hourly = Object.values(hourlyUsageMap)
-    .sort((a, b) => b.hour.localeCompare(a.hour))
+    .sort((a: any, b: any) => b.hour.localeCompare(a.hour))
     .slice(0, 24)
-
+  
   // Sort monthly by month descending
   const monthly = Object.values(monthlyUsageMap)
-    .sort((a, b) => b.month.localeCompare(a.month))
+    .sort((a: any, b: any) => b.month.localeCompare(a.month))
 
   const result = {
     total: totalUsage,
@@ -514,8 +575,34 @@ export async function GET(request: NextRequest) {
     monthly
   }
   
-  // Update cache
-  usageCache = { data: result, timestamp: now }
-
   return NextResponse.json(result)
+}
+
+function getProvider(api: string, modelId: string): string {
+  if (api === 'anthropic-messages' || api === 'anthropic-completions') {
+    if (modelId.includes('claude')) return 'anthropic'
+    return 'minimax'
+  }
+  if (api === 'openai-completions' || api === 'openai-responses') {
+    if (modelId.includes('gpt')) return 'openai'
+    if (modelId.includes('gemini')) return 'google'
+    if (modelId.includes('minimax') || modelId.includes('m2')) return 'minimax'
+    if (modelId.includes('qwen') || modelId.includes('qwq')) return 'qwen'
+    if (modelId.includes('deepseek')) return 'deepseek'
+  }
+  return 'unknown'
+}
+
+function toBeijingHour(date: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false
+  })
+  const parts = formatter.formatToParts(date)
+  const get = (type: string) => parts.find(p => p.type === type)?.value || ''
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:00`
 }

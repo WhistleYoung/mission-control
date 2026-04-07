@@ -132,6 +132,32 @@ function initializeDatabase() {
       agent_name TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- Usage statistics table (cached from session files)
+    CREATE TABLE IF NOT EXISTS usage_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      stat_date DATE NOT NULL,
+      stat_hour TEXT,
+      agent_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      input_tokens INTEGER DEFAULT 0,
+      output_tokens INTEGER DEFAULT 0,
+      cache_read INTEGER DEFAULT 0,
+      cache_write INTEGER DEFAULT 0,
+      total_tokens INTEGER DEFAULT 0,
+      cost REAL DEFAULT 0,
+      session_count INTEGER DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(stat_date, stat_hour, agent_id, model, provider)
+    );
+
+    -- Usage sync metadata
+    CREATE TABLE IF NOT EXISTS usage_sync_meta (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      last_sync_at DATETIME,
+      last_file_mtime TEXT
+    );
   `)
 
   // Create default admin user if not exists
