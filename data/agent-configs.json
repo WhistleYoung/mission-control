@@ -1,5 +1,5 @@
 {
-  "worker": "cli-proxy/gemini-2.5-pro",
+  "worker": "cli-proxy/MiniMax-M2.5",
   "main": "minimax/MiniMax-M2.7",
   "devper": "minimax/MiniMax-M2.7",
   "codrever": "cli-proxy/gemini-2.5-pro"

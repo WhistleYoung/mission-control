@@ -194,6 +194,20 @@ function processSessionFile(filePath: string, agentId: string): UsageEntry[] {
   return entries
 }
 
+// Get all dates in range (YYYY-MM-DD format)
+function getDateRange(startDate: Date, endDate: Date): string[] {
+  const dates: string[] = []
+  const current = new Date(startDate)
+  while (current <= endDate) {
+    const y = current.getFullYear()
+    const m = String(current.getMonth() + 1).padStart(2, '0')
+    const d = String(current.getDate()).padStart(2, '0')
+    dates.push(`${y}-${m}-${d}`)
+    current.setDate(current.getDate() + 1)
+  }
+  return dates
+}
+
 // GET /api/usage
 export async function GET(request: NextRequest) {
   // Auth check
@@ -225,11 +239,8 @@ export async function GET(request: NextRequest) {
   
   let totalSessions = 0
 
-  // Process each agent's sessions
+  // Initialize ALL agents (including those with no usage)
   for (const agentId of agentIds) {
-    const sessionsPath = join(AGENTS_DIR, agentId, 'sessions')
-    
-    // Initialize agent usage
     agentUsageMap[agentId] = {
       agentId,
       agentName: agentNames[agentId] || agentId,
@@ -242,10 +253,35 @@ export async function GET(request: NextRequest) {
       sessionCount: 0,
       models: {}
     }
+  }
+  
+  // Also add any agent from agentNames that doesn't have a sessions directory
+  for (const agentId of Object.keys(agentNames)) {
+    if (!agentUsageMap[agentId]) {
+      agentUsageMap[agentId] = {
+        agentId,
+        agentName: agentNames[agentId] || agentId,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: 0,
+        sessionCount: 0,
+        models: {}
+      }
+    }
+  }
+
+  // Process each agent's sessions
+  for (const agentId of agentIds) {
+    const sessionsPath = join(AGENTS_DIR, agentId, 'sessions')
     
     try {
       const files = readdirSync(sessionsPath)
-      const jsonlFiles = files.filter(f => f.endsWith('.jsonl') && !f.includes('.deleted') && !f.includes('.reset'))
+      // Include all .jsonl files including .deleted and .reset - their usage data is still valid
+      // File names like xxx.jsonl.deleted.2026-04-02T... or xxx.jsonl.reset.2026-04-03T...
+      const jsonlFiles = files.filter(f => f.includes('.jsonl') && !f.includes('.lock') && f !== 'sessions.json')
       
       for (const file of jsonlFiles) {
         const filePath = join(sessionsPath, file)
@@ -401,29 +437,58 @@ export async function GET(request: NextRequest) {
     } catch {}
   }
   
-  // Sort agents by total tokens
+  // Sort agents by total tokens (all agents, including those with 0)
   const agents = Object.values(agentUsageMap)
-    .filter(a => a.totalTokens > 0)
-    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .sort((a, b) => {
+      // Sort by totalTokens descending, but put 0-usage agents at the end
+      if (a.totalTokens === 0 && b.totalTokens === 0) return a.agentName.localeCompare(b.agentName)
+      if (a.totalTokens === 0) return 1
+      if (b.totalTokens === 0) return -1
+      return b.totalTokens - a.totalTokens
+    })
     .map(a => ({
       ...a,
       models: Object.values(a.models).sort((m1, m2) => m2.totalTokens - m1.totalTokens)
     }))
   
-  // Sort models by total tokens
+  // Sort models by total tokens (all models, including those with 0)
   const models = Object.values(modelUsageMap)
-    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .sort((a, b) => {
+      if (a.totalTokens === 0 && b.totalTokens === 0) return a.model.localeCompare(b.model)
+      if (a.totalTokens === 0) return 1
+      if (b.totalTokens === 0) return -1
+      return b.totalTokens - a.totalTokens
+    })
   
-  // Sort daily by date descending
-  const daily = Object.values(dailyUsageMap)
-    .sort((a, b) => b.date.localeCompare(a.date))
+  // Get last 10 days with 0-fill for missing days
+  const today = new Date()
+  const tenDaysAgo = new Date(today)
+  tenDaysAgo.setDate(tenDaysAgo.getDate() - 9)
+  const allLast10Days = getDateRange(tenDaysAgo, today)
+  
+  const daily = allLast10Days.map(date => {
+    const existing = dailyUsageMap[date]
+    if (existing) {
+      return existing
+    }
+    return {
+      date,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: 0,
+      sessionCount: 0
+    }
+  }).reverse() // Oldest first for display
   
   // Sort hourly by hour descending, take last 48 hours
   const hourly = Object.values(hourlyUsageMap)
     .sort((a, b) => b.hour.localeCompare(a.hour))
     .slice(0, 48)
 
-  // Sort monthly by month descending
+  // Sort monthly by month descending (all months)
   const monthly = Object.values(monthlyUsageMap)
     .sort((a, b) => b.month.localeCompare(a.month))
 

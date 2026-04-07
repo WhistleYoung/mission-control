@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { execSync } from 'child_process'
+import { spawn } from 'child_process'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { getAgentNames } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
@@ -24,11 +24,11 @@ let taskCache: { tasks: RealtimeTask[]; timestamp: number } = {
   tasks: [],
   timestamp: 0
 }
-const CACHE_TTL = 30000 // 30 seconds
+const CACHE_TTL = 60000 // 60 seconds - reduce CLI calls for better performance
 
 /**
  * Get active/realtime tasks from OpenClaw Gateway via CLI
- * Uses 5-second cache to avoid slow CLI calls blocking page load
+ * Uses async spawn instead of execSync to avoid timeout issues
  */
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
@@ -49,13 +49,37 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Use CLI to get sessions list
-    const output = execSync(
-      'openclaw gateway call sessions.list --params "{}" --json 2>/dev/null',
-      { timeout: 10000 }
-    ).toString()
+    // Use async spawn instead of execSync to avoid timeout issues
+    const result = await new Promise<any>((resolve, reject) => {
+      const output: Buffer[] = []
+      const proc = spawn('openclaw', ['gateway', 'call', 'sessions.list', '--params', '{}', '--json'], {
+        timeout: 15000,
+        shell: false
+      })
+      
+      proc.stdout.on('data', (data) => output.push(data))
+      proc.stderr.on('data', () => {}) // Ignore stderr
+      
+      proc.on('error', (err) => reject(err))
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`Process exited with code ${code}`))
+        } else {
+          try {
+            resolve(JSON.parse(Buffer.concat(output).toString()))
+          } catch (e) {
+            reject(new Error('Failed to parse JSON output'))
+          }
+        }
+      })
+      
+      // Timeout after 15 seconds
+      setTimeout(() => {
+        proc.kill('SIGTERM')
+        reject(new Error('Command timeout'))
+      }, 15000)
+    })
     
-    const result = JSON.parse(output)
     const tasks: RealtimeTask[] = []
     
     // Agent name mapping from openclaw.json
@@ -146,12 +170,35 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Delete the session via Gateway CLI (use sessions.delete for idle/done sessions)
-    const output = execSync(
-      `openclaw gateway call sessions.delete --params '{"key":"${sessionKey}"}' --json 2>/dev/null`,
-      { timeout: 10000 }
-    ).toString()
-
-    const result = JSON.parse(output)
+    const result = await new Promise<any>((resolve, reject) => {
+      const output: Buffer[] = []
+      const proc = spawn('openclaw', ['gateway', 'call', 'sessions.delete', '--params', `{"key":"${sessionKey}"}`, '--json'], {
+        timeout: 10000,
+        shell: false
+      })
+      
+      proc.stdout.on('data', (data) => output.push(data))
+      proc.stderr.on('data', () => {})
+      
+      proc.on('error', (err) => reject(err))
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`Process exited with code ${code}`))
+        } else {
+          try {
+            resolve(JSON.parse(Buffer.concat(output).toString()))
+          } catch (e) {
+            reject(new Error('Failed to parse JSON output'))
+          }
+        }
+      })
+      
+      setTimeout(() => {
+        proc.kill('SIGTERM')
+        reject(new Error('Command timeout'))
+      }, 10000)
+    })
+    
     return NextResponse.json({ 
       ok: true, 
       sessionKey,

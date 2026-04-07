@@ -8,6 +8,10 @@ import type { NextRequest } from 'next/server'
 
 const AGENTS_DIR = '/home/bullrom/.openclaw/agents'
 
+// Sessions API cache - avoid re-reading all session files on every request
+const SESSIONS_CACHE_TTL = 10000 // 10 seconds
+let sessionsCache: { data: any; timestamp: number } = { data: null, timestamp: 0 }
+
 // Agent name mapping from openclaw.json
 function getAgentName(agentId: string): string {
   const names = getAgentNames()
@@ -30,48 +34,42 @@ function isRealConversationMessage(event: any): boolean {
   return typeof content === 'string' && content.length > 0
 }
 
-// Check if session is a cron/heartbeat session
-function isCronSession(filePath: string): boolean {
-  const content = readFileSync(filePath, 'utf-8')
-  const lines = content.split('\n').filter(l => l.trim())
+// Check if session is a cron/heartbeat session by filename pattern
+function isCronSession(filePath: string, filename: string): boolean {
+  // Fast check: filename-based filtering first
+  // Files that are explicitly cron/heartbeat marked
+  if (filename.includes('.cron.') || filename.includes('.heartbeat.')) return true
   
-  // Check first few lines for cron patterns
-  for (let i = 0; i < Math.min(5, lines.length); i++) {
+  // Fast content check - just read first line
+  try {
+    const fd = readFileSync(filePath, 'utf-8')
+    const firstLine = fd.split('\n')[0]
+    if (!firstLine) return false
+    
     try {
-      const event = JSON.parse(lines[i])
+      const event = JSON.parse(firstLine)
       const sessionKey = event.sessionKey || event.id || ''
       
-      // Skip if session key contains cron or heartbeat (reliable indicator)
+      // Skip if session key contains cron or heartbeat
       if (sessionKey.includes(':cron:') || sessionKey.includes('cron:')) return true
       if (sessionKey.includes(':heartbeat') || sessionKey.includes('heartbeat')) return true
       
-      // Skip if first user message is clearly a cron/heartbeat message
+      // Check first user message for cron patterns
       if (event.message?.role === 'user') {
         const message = event.message?.content
-        // Extract actual text content from the message array
-        let textContent = ''
-        if (typeof message === 'string') {
-          textContent = message
-        } else if (Array.isArray(message)) {
-          const textObj = message.find((c: any) => c.type === 'text')
-          textContent = textObj?.text || ''
-        }
+        let textContent = typeof message === 'string' ? message : 
+          (Array.isArray(message) ? message.find((c: any) => c.type === 'text')?.text || '' : '')
         
-        // Check for [cron: pattern at start - reliable cron indicator
         if (textContent.startsWith('[cron:') || textContent.startsWith('[heartbeat') || textContent.startsWith('[cron ')) {
           return true
         }
-        
-        // Also filter short messages with heartbeat/cron
-        if (textContent.length < 100) {
-          const lowerMsg = textContent.toLowerCase()
-          if (lowerMsg.includes('heartbeat') || lowerMsg.includes('cron')) {
-            return true
-          }
+        if (textContent.length < 100 && (textContent.toLowerCase().includes('heartbeat') || textContent.toLowerCase().includes('cron'))) {
+          return true
         }
       }
     } catch {}
-  }
+  } catch {}
+  
   return false
 }
 
@@ -244,10 +242,19 @@ export async function GET(request: NextRequest) {
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
 
+  const now = Date.now()
+
   try {
     const { searchParams } = new URL(request.url)
     const agentId = searchParams.get('agentId')
     const projectId = searchParams.get('projectId')
+    
+    // Check cache - only cache full list requests (no filters)
+    const cacheKey = agentId || projectId || '__all__'
+    if (!agentId && !projectId && sessionsCache.data && (now - sessionsCache.timestamp) < SESSIONS_CACHE_TTL) {
+      console.log(`GET sessions: returning cached data (age: ${now - sessionsCache.timestamp}ms)`)
+      return NextResponse.json(sessionsCache.data)
+    }
     
     const sessions: any[] = []
     
@@ -288,9 +295,9 @@ export async function GET(request: NextRequest) {
         
         const filePath = join(sessionsDir, file)
         
-        // Skip cron/heartbeat sessions
+        // Skip cron/heartbeat sessions (optimized - pass filename for fast check)
         try {
-          if (isCronSession(filePath)) continue
+          if (isCronSession(filePath, file)) continue
         } catch {
           continue
         }
@@ -339,6 +346,11 @@ export async function GET(request: NextRequest) {
     
     // Sort by last message time
     sessions.sort((a, b) => new Date(b.lastMessage).getTime() - new Date(a.lastMessage).getTime())
+    
+    // Update cache only for full list requests
+    if (!agentId && !projectId) {
+      sessionsCache = { data: sessions, timestamp: now }
+    }
     
     return NextResponse.json(sessions)
   } catch (error) {

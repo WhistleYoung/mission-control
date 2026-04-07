@@ -25,12 +25,12 @@ export async function POST(request: NextRequest) {
   try {
     const { title, description, status, priority, assignee_type, assignee_id, assignee_name, due_date } = await request.json()
     
-    const [result]: any = await pool.query(
+    const [result] = await pool.query(
       'INSERT INTO tasks (title, description, status, priority, assignee_type, assignee_id, assignee_name, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [title, description, status || 'backlog', priority || 'medium', assignee_type || 'ai', assignee_id, assignee_name, due_date]
     )
     
-    return NextResponse.json({ success: true, id: result.insertId })
+    return NextResponse.json({ success: true, id: (result as any).insertId ?? 0 })
   } catch (error) {
     console.error('Failed to create task:', error)
     return NextResponse.json({ error: 'Failed to create task' }, { status: 500 })
