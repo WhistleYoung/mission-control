@@ -245,7 +245,7 @@ export async function GET(request: NextRequest) {
     
     try {
       const files = readdirSync(sessionsPath)
-      const jsonlFiles = files.filter(f => f.endsWith('.jsonl') && !f.includes('.deleted') && !f.includes('.reset'))
+      const jsonlFiles = files.filter(f => f.includes('.jsonl'))
       
       for (const file of jsonlFiles) {
         const filePath = join(sessionsPath, file)
