@@ -267,13 +267,17 @@ export async function GET(request: NextRequest) {
   if (!forceRefresh) {
     const cachedData = readUsageFromDB()
     if (cachedData && cachedData.totalSessions > 0) {
+      // Trigger background sync (non-blocking) for next time
+      if (typeof process !== 'undefined') {
+        // Fire and forget - will update cache for next request
+        fetch(new URL('/api/usage-sync', request.url), { method: 'POST' }).catch(() => {})
+      }
       return NextResponse.json(cachedData)
     }
   }
   
-  // Fallback: calculate from files (slow path)
-  // This will be triggered on first request or force refresh
-  // In production, you should call /api/usage-sync first, then return cached data
+  // No cache or force refresh: calculate from files (slow path)
+  // After calculating, data will be saved to DB for next request
   
   const agentNames = getAgentNames()
   const agentIds = getAgentIds()

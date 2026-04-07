@@ -79,8 +79,8 @@ function getAgentIds(): string[] {
   }
 }
 
-// GET /api/usage-sync - Sync usage data from session files to database
-export async function GET(request: Request) {
+// POST /api/usage-sync - Sync usage data from session files to database (background)
+export async function POST(request: Request) {
   // Simple auth check via header (for internal cron calls)
   const authHeader = request.headers.get('x-sync-key')
   const expectedKey = process.env.USAGE_SYNC_KEY || 'sync-key-change-me'

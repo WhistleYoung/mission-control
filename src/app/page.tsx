@@ -2013,6 +2013,7 @@ export default function MissionControl() {
       fastFetch('/api/channels').then(data => { if (Array.isArray(data)) setChannels(data) })
     },
     usage: () => {
+      // API will return from cache immediately and trigger background sync
       fastFetch('/api/usage').then(data => { if (data?.total !== undefined) setUsageData(data) })
     },
   }
