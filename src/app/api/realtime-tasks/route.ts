@@ -1,8 +1,33 @@
 import { NextResponse } from 'next/server'
-import { execSync } from 'child_process'
+import { spawn } from 'child_process'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { getAgentNames } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
+
+// Helper function to run command async
+function execCommand(cmd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args)
+    let stdout = ''
+    let stderr = ''
+    
+    proc.stdout?.on('data', (data) => { stdout += data.toString() })
+    proc.stderr?.on('data', (data) => { stderr += data.toString() })
+    
+    proc.on('close', (code) => {
+      if (code === 0) resolve(stdout)
+      else reject(new Error(`Command failed: ${stderr}`))
+    })
+    
+    proc.on('error', reject)
+    
+    // Timeout after 30 seconds
+    setTimeout(() => {
+      proc.kill()
+      reject(new Error('Command timeout'))
+    }, 30000)
+  })
+}
 
 interface RealtimeTask {
   sessionKey: string
@@ -49,11 +74,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Use CLI to get sessions list
-    const output = execSync(
-      'openclaw gateway call sessions.list --params "{}" --json 2>/dev/null',
-      { timeout: 10000 }
-    ).toString()
+    // Use CLI to get sessions list (async to avoid blocking)
+    const output = await execCommand('openclaw', ['gateway', 'call', 'sessions.list', '--params', '{}', '--json'])
     
     const result = JSON.parse(output)
     const tasks: RealtimeTask[] = []
@@ -145,11 +167,8 @@ export async function DELETE(request: NextRequest) {
       }, { status: 403 })
     }
 
-    // Delete the session via Gateway CLI (use sessions.delete for idle/done sessions)
-    const output = execSync(
-      `openclaw gateway call sessions.delete --params '{"key":"${sessionKey}"}' --json 2>/dev/null`,
-      { timeout: 10000 }
-    ).toString()
+    // Delete the session via Gateway CLI (async to avoid blocking)
+    const output = await execCommand('openclaw', ['gateway', 'call', 'sessions.delete', '--params', `{"key":"${sessionKey}"}`, '--json'])
 
     const result = JSON.parse(output)
     return NextResponse.json({ 
