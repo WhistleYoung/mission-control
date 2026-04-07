@@ -13,7 +13,7 @@ let sessionsCache: { sessions: any[]; timestamp: number } = {
   sessions: [],
   timestamp: 0
 }
-const SESSIONS_CACHE_TTL = 10000 // 10 seconds
+const SESSIONS_CACHE_TTL = 300000 // 5 minutes - return cached immediately
 
 // Agent name mapping from openclaw.json
 function getAgentName(agentId: string): string {

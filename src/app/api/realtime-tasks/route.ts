@@ -24,7 +24,7 @@ let taskCache: { tasks: RealtimeTask[]; timestamp: number } = {
   tasks: [],
   timestamp: 0
 }
-const CACHE_TTL = 30000 // 30 seconds
+const CACHE_TTL = 300000 // 5 minutes - return cached immediately
 
 /**
  * Get active/realtime tasks from OpenClaw Gateway via CLI
