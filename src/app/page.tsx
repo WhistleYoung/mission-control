@@ -3058,9 +3058,6 @@ ${agentsForm.tools || '无'}`
                         )}
                       </div>
                     ))}
-                    {(usageData?.agents || []).length > 4 && (
-                      <div className="text-center text-xs text-gray-500 py-2">还有 {(usageData?.agents || []).length - 4} 个 Agent</div>
-                    )}
                     {(!usageData?.agents || usageData.agents.length === 0) && (
                       <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
                     )}
@@ -3095,9 +3092,6 @@ ${agentsForm.tools || '无'}`
                         </div>
                       </div>
                     ))}
-                    {(usageData?.models || []).length > 4 && (
-                      <div className="text-center text-xs text-gray-500 py-2">还有 {(usageData?.models || []).length - 4} 个模型</div>
-                    )}
                     {(!usageData?.models || usageData.models.length === 0) && (
                       <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
                     )}
