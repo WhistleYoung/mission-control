@@ -3023,7 +3023,7 @@ ${agentsForm.tools || '无'}`
                 {/* By Agent */}
                 <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
                   <h3 className="text-white font-semibold mb-4">按 Agent 分组</h3>
-                  <div className="max-h-80 overflow-y-auto space-y-3 pr-2 scrollbar-thin">
+                  <div className="h-80 overflow-y-auto space-y-3 pr-2 scrollbar-thin">
                     {(usageData?.agents || []).slice(0, 4).map((agent: any) => (
                       <div key={agent.agentId} className={`bg-gray-800/50 rounded-lg p-3 ${agent.totalTokens === 0 ? 'opacity-50' : ''}`}>
                         <div className="flex items-center justify-between mb-2">
@@ -3070,7 +3070,7 @@ ${agentsForm.tools || '无'}`
                 {/* By Model */}
                 <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
                   <h3 className="text-white font-semibold mb-4">按模型分组</h3>
-                  <div className="max-h-80 overflow-y-auto space-y-3 pr-2 scrollbar-thin">
+                  <div className="h-80 overflow-y-auto space-y-3 pr-2 scrollbar-thin">
                     {(usageData?.models || []).slice(0, 4).map((model: any) => (
                       <div key={`${model.provider}:${model.model}`} className={`bg-gray-800/50 rounded-lg p-3 ${model.totalTokens === 0 ? 'opacity-50' : ''}`}>
                         <div className="flex items-center justify-between mb-2">
