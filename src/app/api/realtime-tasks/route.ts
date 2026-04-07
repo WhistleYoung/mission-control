@@ -28,6 +28,18 @@ let taskCache: { tasks: RealtimeTask[]; timestamp: number } = {
   timestamp: 0
 }
 
+// Safe JSON parse to avoid circular reference issues
+function safeJsonStringify(obj: any): string {
+  const seen = new WeakSet()
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) return undefined
+      seen.add(value)
+    }
+    return value
+  })
+}
+
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
@@ -69,7 +81,7 @@ export async function GET(request: NextRequest) {
           }))
           
           // Trigger background refresh
-          refreshCacheInBackground()
+          triggerBackgroundSync()
           
           return NextResponse.json({ tasks, cached: true, age })
         }
@@ -81,34 +93,45 @@ export async function GET(request: NextRequest) {
 
   // Fetch fresh data from gateway
   try {
-    const result = await gatewayCall('sessions.list', {}) as any[]
+    const rawResult = await gatewayCall('sessions.list', {})
     
-    if (!Array.isArray(result)) {
-      throw new Error('Invalid result from gateway')
+    // Safely parse and clean the result
+    let sessions: any[] = []
+    if (rawResult) {
+      if (Array.isArray(rawResult)) {
+        sessions = rawResult
+      } else if (typeof rawResult === 'object') {
+        // Handle different response formats
+        sessions = rawResult.sessions || rawResult.data || rawResult.result || []
+      }
+    }
+    
+    if (!Array.isArray(sessions)) {
+      throw new Error('Invalid result format from gateway')
     }
 
     const agentNames = getAgentNames()
     const tasks: RealtimeTask[] = []
     
-    for (const session of result) {
-      const status = session.status?.toLowerCase()
+    for (const session of sessions) {
+      const status = (session.status || '').toLowerCase()
       if (status !== 'running' && status !== 'active') continue
       
-      const agentId = session.agentId || session.agent?.id || 'unknown'
+      const agentId = session.agentId || session.agent?.id || session.agent_id || 'unknown'
       
       tasks.push({
-        sessionKey: session.sessionKey || session.id || '',
-        sessionId: session.sessionId || session.id,
+        sessionKey: session.sessionKey || session.id || session.session_id || '',
+        sessionId: session.sessionId || session.id || session.session_id,
         agentId,
-        agentName: agentNames[agentId] || session.agent?.name || agentId,
-        model: session.model || session.agent?.model,
+        agentName: agentNames[agentId] || session.agent?.name || session.agent_name || agentId,
+        model: session.model || session.agent?.model || '',
         status: status === 'running' ? 'running' : 'idle',
-        task: session.task || session.currentTask || '',
-        startedAt: session.startedAt || session.started_at,
-        lastActive: session.lastActive || session.last_active,
+        task: session.task || session.currentTask || session.prompt || '',
+        startedAt: session.startedAt || session.started_at || '',
+        lastActive: session.lastActive || session.last_active || '',
         childSessions: session.childSessions || [],
-        isSubagent: session.isSubagent || session.is_subagent,
-        isMainAgent: session.isMainAgent || session.is_main_agent
+        isSubagent: !!session.isSubagent || !!session.is_subagent,
+        isMainAgent: !!session.isMainAgent || !!session.is_main_agent
       })
     }
 
@@ -122,7 +145,7 @@ export async function GET(request: NextRequest) {
     // Update cache
     taskCache = { tasks, timestamp: now }
     
-    // Trigger background sync to database
+    // Sync to database
     syncToDatabase(tasks)
 
     return NextResponse.json({ tasks, cached: false, age: 0 })
@@ -159,9 +182,18 @@ function syncToDatabase(tasks: RealtimeTask[]) {
     
     const insertMany = db.transaction((ts: RealtimeTask[]) => {
       for (const t of ts) {
-        insert.run(t.sessionKey, t.agentId, t.agentName, t.model || '', t.status, 
-                   t.task || '', t.startedAt || '', t.lastActive || '', 
-                   t.isSubagent ? 1 : 0, t.isMainAgent ? 1 : 0)
+        insert.run(
+          t.sessionKey || '', 
+          t.agentId || '', 
+          t.agentName || '', 
+          t.model || '', 
+          t.status || 'idle', 
+          t.task || '', 
+          t.startedAt || '', 
+          t.lastActive || '', 
+          t.isSubagent ? 1 : 0, 
+          t.isMainAgent ? 1 : 0
+        )
       }
     })
     
@@ -172,9 +204,11 @@ function syncToDatabase(tasks: RealtimeTask[]) {
   }
 }
 
-function refreshCacheInBackground() {
+function triggerBackgroundSync() {
   // Fire and forget - will update cache for next request
-  fetch(new URL('/api/sync', 'http://localhost:10086'), { method: 'POST' }).catch(() => {})
+  try {
+    fetch('http://localhost:10086/api/sync', { method: 'POST' }).catch(() => {})
+  } catch (e) {}
 }
 
 // DELETE - Kill a session
