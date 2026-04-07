@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { pool } from '@/lib/db'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
+import { getAgentNames } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
 
 export async function GET(request: NextRequest) {
@@ -12,6 +13,7 @@ export async function GET(request: NextRequest) {
     const [customEvents] = await pool.query('SELECT * FROM calendar_events ORDER BY date ASC, time ASC')
     
     const now = new Date()
+    const agentNames = getAgentNames()
     const cronJobs = [
       {
         id: 'cron-1',
@@ -21,7 +23,7 @@ export async function GET(request: NextRequest) {
         type: 'cron',
         status: 'completed',
         agent_id: 'main',
-        agent_name: '小七',
+        agent_name: agentNames['main'] || '小七',
       },
       {
         id: 'cron-2',
@@ -31,7 +33,7 @@ export async function GET(request: NextRequest) {
         type: 'cron',
         status: 'scheduled',
         agent_id: 'main',
-        agent_name: '小七',
+        agent_name: agentNames['main'] || '小七',
       },
       {
         id: 'cron-3',
@@ -41,7 +43,7 @@ export async function GET(request: NextRequest) {
         type: 'cron',
         status: 'scheduled',
         agent_id: 'worker',
-        agent_name: '壹号牛马',
+        agent_name: agentNames['worker'] || '壹号牛马',
       },
     ]
     
@@ -63,12 +65,12 @@ export async function POST(request: NextRequest) {
   try {
     const { title, date, time, type, agent_id, agent_name } = await request.json()
     
-    const [result] = await pool.query(
+    const [result]: any = await pool.query(
       'INSERT INTO calendar_events (title, date, time, type, agent_id, agent_name) VALUES (?, ?, ?, ?, ?, ?)',
       [title, date, time, type || 'one-time', agent_id, agent_name]
     )
     
-    return NextResponse.json({ success: true, id: (result as any).insertId ?? 0 })
+    return NextResponse.json({ success: true, id: result.insertId })
   } catch (error) {
     console.error('Failed to create event:', error)
     return NextResponse.json({ error: 'Failed to create event' }, { status: 500 })

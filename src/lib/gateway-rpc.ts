@@ -1,10 +1,8 @@
-
 /**
  * Gateway RPC client via WebSocket - much faster than CLI
  * Direct WebSocket connection to Gateway avoids CLI startup overhead (~4s → ~100ms)
  */
 import { readFileSync, existsSync } from 'fs'
-import * as crypto from 'crypto' // Import crypto module
 
 const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
 
@@ -34,11 +32,6 @@ function getGatewayConfig(): GatewayConfig | null {
  * Falls back to CLI if WebSocket fails
  */
 export async function gatewayCall<T = any>(method: string, params: Record<string, any> = {}): Promise<T> {
-  // For 'agents.list' method, always use CLI for now to ensure functionality
-  if (method === 'agents.list') {
-    return gatewayCallCLI<T>(method, params)
-  }
-
   const config = getGatewayConfig()
   if (!config || !config.token) {
     // Fallback to CLI
@@ -63,7 +56,6 @@ async function gatewayCallWebSocket<T>(config: GatewayConfig, method: string, pa
     let requestId = 0
     let connected = false
     let timer: NodeJS.Timeout
-    let pendingMethod: string | null = null
 
     const cleanup = () => {
       clearTimeout(timer)
@@ -79,8 +71,7 @@ async function gatewayCallWebSocket<T>(config: GatewayConfig, method: string, pa
 
     ws.on('open', () => {
       connected = true
-      // Initiate connect request
-      pendingMethod = 'connect'
+      // Connect with operator role
       ws.send(JSON.stringify({
         type: 'req',
         id: `rpc-${++requestId}`,
@@ -89,14 +80,14 @@ async function gatewayCallWebSocket<T>(config: GatewayConfig, method: string, pa
           minProtocol: 3,
           maxProtocol: 3,
           client: {
-            id: 'openclaw-control-ui', // Mission Control client.id
-            version: '1.0.0', // Mission Control version
+            id: 'mission-control-rpc',
+            version: '1.0.0',
             platform: process.platform,
-            mode: 'ui' // Control UI mode
+            mode: 'operator'
           },
           role: 'operator',
           scopes: ['operator.read', 'operator.write', 'operator.admin'],
-          auth: { token: config.token } // Sending token directly initially
+          auth: { token: config.token }
         }
       }))
     })
@@ -105,61 +96,26 @@ async function gatewayCallWebSocket<T>(config: GatewayConfig, method: string, pa
       try {
         const msg = JSON.parse(data.toString())
 
-        // Handle connect response
-        if (pendingMethod === 'connect' && msg.type === 'res' && msg.id?.startsWith('rpc-')) {
-          if (msg.ok) {
-            // Successfully connected, now send the actual RPC call
-            pendingMethod = method
-            ws.send(JSON.stringify({
-              type: 'req',
-              id: `call-${++requestId}`,
-              method,
-              params
-            }))
-          } else if (msg.method === 'challenge' && msg.params?.nonce) {
-            // Received a challenge, respond with signature
-            const hmac = crypto.createHmac('sha256', config.token)
-            hmac.update(msg.params.nonce)
-            const signature = hmac.digest('hex')
-
-            pendingMethod = 'signature'
-            ws.send(JSON.stringify({
-              type: 'req',
-              id: `sig-${++requestId}`,
-              method: 'signature',
-              params: {
-                signature: signature
-              }
-            }))
-          } else {
-            // Failed connect or unexpected response during connect
+        // Connect response
+        if (msg.type === 'res' && msg.id?.startsWith('rpc-') && !msg.method) {
+          if (!msg.ok) {
             cleanup()
             reject(new Error(msg.error || 'Gateway connect failed'))
+            return
           }
+
+          // Send the actual RPC call
+          ws.send(JSON.stringify({
+            type: 'req',
+            id: `call-${++requestId}`,
+            method,
+            params
+          }))
           return
         }
 
-        // Handle signature response
-        if (pendingMethod === 'signature' && msg.type === 'res' && msg.id?.startsWith('sig-')) {
-          if (msg.ok) {
-            // Signature accepted, now send the actual RPC call
-            pendingMethod = method
-            ws.send(JSON.stringify({
-              type: 'req',
-              id: `call-${++requestId}`,
-              method,
-              params
-            }))
-          } else {
-            // Signature failed
-            cleanup()
-            reject(new Error(msg.error || 'Gateway signature failed'))
-          }
-          return
-        }
-
-        // Handle actual RPC call response
-        if (pendingMethod === method && msg.type === 'res' && msg.id?.startsWith('call-')) {
+        // RPC response
+        if (msg.type === 'res' && msg.id?.startsWith('call-')) {
           cleanup()
           if (msg.ok) {
             resolve(msg.result)
@@ -168,9 +124,7 @@ async function gatewayCallWebSocket<T>(config: GatewayConfig, method: string, pa
           }
         }
       } catch (err) {
-        console.error('Error parsing message or during WebSocket handler:', err)
-        // Ignore parse errors, but reject if it's a critical handler error
-        // For now, let's assume non-critical parse errors
+        // Ignore parse errors
       }
     })
 
@@ -182,7 +136,7 @@ async function gatewayCallWebSocket<T>(config: GatewayConfig, method: string, pa
     ws.on('close', () => {
       if (!connected) {
         cleanup()
-        reject(new Error('Gateway connection closed unexpectedly'))
+        reject(new Error('Gateway connection closed'))
       }
     })
   })
@@ -192,14 +146,6 @@ function gatewayCallCLI<T>(method: string, params: Record<string, any> = {}): Pr
   const { execSync } = require('child_process')
   const paramsStr = JSON.stringify(params)
   const cmd = `openclaw gateway call ${method} --json --params '${paramsStr}' 2>/dev/null`
-  try {
-    const output = execSync(cmd, { timeout: 10000 }) // 10 second timeout
-    return JSON.parse(output.toString())
-  } catch (error: any) {
-    // If CLI call times out or fails, throw a more informative error
-    const errorMessage = error.message.includes('ETIMEDOUT')
-      ? `CLI call timed out for ${method}`
-      : `CLI call failed for ${method}: ${error.message}`
-    throw new Error(errorMessage)
-  }
+  const output = execSync(cmd, { timeout: 10000 })
+  return JSON.parse(output.toString())
 }
