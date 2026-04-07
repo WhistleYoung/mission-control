@@ -5,6 +5,25 @@ import { verifyAuth } from '@/lib/auth'
 import { getAgentNames } from '@/lib/agent-config'
 
 const AGENTS_DIR = '/home/bullrom/.openclaw/agents'
+const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
+
+// Get all configured models from openclaw.json
+function getAllConfiguredModels(): Array<{id: string, provider: string}> {
+  try {
+    const config = JSON.parse(readFileSync(OPENCLAW_CONFIG, 'utf-8'))
+    const modelsConfig = config.models || { providers: {} }
+    const result: Array<{id: string, provider: string}> = []
+    for (const [providerId, providerData] of Object.entries(modelsConfig.providers || {})) {
+      const provider = providerData as any
+      for (const model of (provider.models || [])) {
+        result.push({ id: model.id, provider: providerId })
+      }
+    }
+    return result
+  } catch {
+    return []
+  }
+}
 
 interface UsageData {
   inputTokens: number
@@ -401,27 +420,69 @@ export async function GET(request: NextRequest) {
     } catch {}
   }
   
-  // Sort agents by total tokens
+  // Sort agents by total tokens (show ALL agents including 0 usage)
   const agents = Object.values(agentUsageMap)
-    .filter(a => a.totalTokens > 0)
     .sort((a, b) => b.totalTokens - a.totalTokens)
     .map(a => ({
       ...a,
       models: Object.values(a.models).sort((m1, m2) => m2.totalTokens - m1.totalTokens)
     }))
   
-  // Sort models by total tokens
-  const models = Object.values(modelUsageMap)
-    .sort((a, b) => b.totalTokens - a.totalTokens)
+  // Get all configured models + merge with actual usage data
+  const configuredModels = getAllConfiguredModels()
+  const allModelsMap: Record<string, ModelUsage> = {}
   
-  // Sort daily by date descending
-  const daily = Object.values(dailyUsageMap)
-    .sort((a, b) => b.date.localeCompare(a.date))
+  // First add all configured models with 0 usage
+  for (const cm of configuredModels) {
+    const key = `${cm.provider}:${cm.id}`
+    if (!allModelsMap[key]) {
+      allModelsMap[key] = {
+        model: cm.id,
+        provider: cm.provider,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: 0,
+        sessionCount: 0
+      }
+    }
+  }
+  // Then merge actual usage data (overwrites zeros if model was used)
+  for (const [key, model] of Object.entries(modelUsageMap)) {
+    allModelsMap[key] = model
+  }
+  const models = Object.values(allModelsMap).sort((a, b) => b.totalTokens - a.totalTokens)
   
-  // Sort hourly by hour descending, take last 48 hours
+  // Daily: pad to exactly 10 days including dates with 0 usage
+  const today = new Date()
+  const todayStr = today.toISOString().slice(0, 10)
+  const tenDays: string[] = []
+  for (let i = 9; i >= 0; i--) {
+    const d = new Date(today)
+    d.setDate(d.getDate() - i)
+    tenDays.push(d.toISOString().slice(0, 10))
+  }
+  const daily = tenDays.map(date => {
+    const existing = dailyUsageMap[date]
+    if (existing) return existing
+    return {
+      date,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: 0,
+      sessionCount: 0
+    }
+  })
+  
+  // Sort hourly by hour descending, take last 24 hours
   const hourly = Object.values(hourlyUsageMap)
     .sort((a, b) => b.hour.localeCompare(a.hour))
-    .slice(0, 48)
+    .slice(0, 24)
 
   // Sort monthly by month descending
   const monthly = Object.values(monthlyUsageMap)

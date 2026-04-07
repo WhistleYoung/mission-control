@@ -3025,11 +3025,12 @@ ${agentsForm.tools || '无'}`
                   <h3 className="text-white font-semibold mb-4">按 Agent 分组</h3>
                   <div className="space-y-3">
                     {(usageData?.agents || []).map((agent: any) => (
-                      <div key={agent.agentId} className="bg-gray-800/50 rounded-lg p-3">
+                      <div key={agent.agentId} className={`bg-gray-800/50 rounded-lg p-3 ${agent.totalTokens === 0 ? 'opacity-50' : ''}`}>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <Bot className="w-4 h-4 text-blue-400" />
                             <span className="text-white text-sm font-medium">{agent.agentName}</span>
+                            {agent.totalTokens === 0 && <span className="text-xs text-gray-600">(未使用)</span>}
                           </div>
                           <span className="text-xs text-gray-500">{agent.sessionCount} 会话</span>
                         </div>
@@ -3068,12 +3069,13 @@ ${agentsForm.tools || '无'}`
                   <h3 className="text-white font-semibold mb-4">按模型分组</h3>
                   <div className="space-y-3">
                     {(usageData?.models || []).map((model: any) => (
-                      <div key={`${model.provider}:${model.model}`} className="bg-gray-800/50 rounded-lg p-3">
+                      <div key={`${model.provider}:${model.model}`} className={`bg-gray-800/50 rounded-lg p-3 ${model.totalTokens === 0 ? 'opacity-50' : ''}`}>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <Cpu className="w-4 h-4 text-green-400" />
                             <span className="text-white text-sm font-medium truncate max-w-[160px]">{model.model}</span>
                             <span className="text-xs text-gray-500">({model.provider})</span>
+                            {model.totalTokens === 0 && <span className="text-xs text-gray-600">(未使用)</span>}
                           </div>
                           <span className="text-xs text-gray-500">{model.sessionCount} 会话</span>
                         </div>
@@ -3190,16 +3192,16 @@ ${agentsForm.tools || '无'}`
                 )}
               </div>
 
-              {/* Daily Usage */}
+              {/* Daily Usage - Last 10 days */}
               <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                <h3 className="text-white font-semibold mb-4">每日用量趋势</h3>
+                <h3 className="text-white font-semibold mb-4">每日用量趋势（近10天）</h3>
                 <div className="space-y-2">
-                  {(usageData?.daily || []).slice(0, 14).map((day: any) => (
+                  {(usageData?.daily || []).map((day: any) => (
                     <div key={day.date} className="flex items-center gap-4">
                       <span className="text-gray-500 text-sm w-24">{day.date}</span>
                       <div className="flex-1 h-6 bg-gray-800 rounded-full overflow-hidden">
                         <div 
-                          className="h-full bg-gradient-to-r from-purple-500 to-pink-400 rounded-full"
+                          className={`h-full rounded-full ${day.totalTokens > 0 ? 'bg-gradient-to-r from-purple-500 to-pink-400' : 'bg-gray-700'}`}
                           style={{ width: `${usageData?.daily[0]?.totalTokens ? Math.min(100, (day.totalTokens / usageData.daily[0].totalTokens) * 100) : 0}%` }}
                         />
                       </div>
