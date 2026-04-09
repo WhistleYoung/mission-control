@@ -4,8 +4,7 @@ import { join } from 'path'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { getAgentNames } from '@/lib/agent-config'
 import { db } from '@/lib/db'
-
-const AGENTS_DIR = '/home/bullrom/.openclaw/agents'
+import { AGENTS_DIR } from '@/lib/paths'
 
 interface UsageData {
   inputTokens: number

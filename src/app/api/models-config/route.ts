@@ -3,8 +3,7 @@ import { readFileSync, writeFileSync } from 'fs'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { restartGateway } from '@/lib/gateway'
 import type { NextRequest } from 'next/server'
-
-const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
+import { OPENCLAW_CONFIG } from '@/lib/paths'
 
 // GET /api/models-config - Get all models from openclaw.json
 export async function GET(request: NextRequest) {

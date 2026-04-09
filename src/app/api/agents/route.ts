@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server'
 import { rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, cpSync } from 'fs'
-import { join } from 'path'
+import path, { join, resolve } from 'path'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { restartGateway } from '@/lib/gateway'
 import { getAgentNames, getAgentEmojis } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
-
-const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
-const LOCAL_CONFIG = '/home/bullrom/mission-control/data/agent-configs.json'
-const TEMPLATE_WORKSPACE = '/home/bullrom/.openclaw/workspace'
+import { OPENCLAW_CONFIG, MC_AGENT_CONFIGS, TEMPLATE_WORKSPACE, getAgentWorkspace, getAgentDir, MC_DATA_DIR, WORKSPACE, WORKSPACE_PREFIX } from '@/lib/paths'
 
 function getAgentIdentityName(agentId: string, agentName?: string): string {
   // Use names from openclaw.json config (single source of truth)
@@ -125,8 +122,8 @@ export async function GET(request: NextRequest) {
 
   let localModels: Record<string, string> = {}
   try {
-    if (existsSync(LOCAL_CONFIG)) {
-      localModels = JSON.parse(readFileSync(LOCAL_CONFIG, 'utf-8'))
+    if (existsSync(MC_AGENT_CONFIGS)) {
+      localModels = JSON.parse(readFileSync(MC_AGENT_CONFIGS, 'utf-8'))
     }
   } catch (e) {}
 
@@ -208,7 +205,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing parameters' }, { status: 400 })
     }
     
-    const workspacePath = `/home/bullrom/.openclaw/workspace-${id}`
+    const workspacePath = getAgentWorkspace(id)
     try {
       mkdirSync(workspacePath, { recursive: true })
       // Create empty memory directory for new agent (memory is agent-specific, not copied)
@@ -294,7 +291,7 @@ The more you know, the better you can help. But remember — you're learning abo
           id: id,
           name: name,
           workspace: workspacePath,
-          agentDir: `/home/bullrom/.openclaw/agents/${id}/agent`,
+          agentDir: getAgentDir(id) + '/agent',
           model: model || 'minimax/MiniMax-M2.7',
         }
         
@@ -330,17 +327,17 @@ export async function PUT(request: NextRequest) {
     if (model) {
       let localModels: Record<string, string> = {}
       try {
-        if (existsSync(LOCAL_CONFIG)) {
-          localModels = JSON.parse(readFileSync(LOCAL_CONFIG, 'utf-8'))
+        if (existsSync(MC_AGENT_CONFIGS)) {
+          localModels = JSON.parse(readFileSync(MC_AGENT_CONFIGS, 'utf-8'))
         }
       } catch (e) {}
       localModels[id] = model
       
-      const dir = '/home/bullrom/mission-control/data'
+      const dir = MC_DATA_DIR
       if (!existsSync(dir)) {
         require('fs').mkdirSync(dir, { recursive: true })
       }
-      writeFileSync(LOCAL_CONFIG, JSON.stringify(localModels, null, 2))
+      writeFileSync(MC_AGENT_CONFIGS, JSON.stringify(localModels, null, 2))
     }
     
     // Find agent workspace path first
@@ -452,11 +449,11 @@ export async function PATCH(request: NextRequest) {
         }
       }
     } catch (e) {
-      workspacePath = id === 'main' ? '/home/bullrom/.openclaw/workspace' : `/home/bullrom/.openclaw/workspace-${id}`
+      workspacePath = getAgentWorkspace(id)
     }
     
     if (!workspacePath) {
-      workspacePath = id === 'main' ? '/home/bullrom/.openclaw/workspace' : `/home/bullrom/.openclaw/workspace-${id}`
+      workspacePath = getAgentWorkspace(id)
     }
     
     // Update AGENTS.md
@@ -559,26 +556,26 @@ export async function DELETE(request: NextRequest) {
     
     // Fallback path if not found in config
     if (!workspacePath) {
-      workspacePath = `/home/bullrom/.openclaw/workspace-${id}`
+      workspacePath = getAgentWorkspace(id)
     }
     
     // Also try common workspace naming patterns
     const possiblePaths = [
       workspacePath,
-      `/home/bullrom/.openclaw/workspace-${id}`,
-      `/home/bullrom/.openclaw/workspace/${id}`,
+      getAgentWorkspace(id),
+      path.join(WORKSPACE, id),
     ]
     
-    for (const path of possiblePaths) {
+    for (const p of possiblePaths) {
       try {
-        if (existsSync(path)) {
-          rmSync(path, { recursive: true, force: true })
+        if (existsSync(p)) {
+          rmSync(p, { recursive: true, force: true })
         }
       } catch (e) {}
     }
     
     // Delete agent folder in agents directory
-    const agentDir = `/home/bullrom/.openclaw/agents/${id}`
+    const agentDir = getAgentDir(id)
     try {
       if (existsSync(agentDir)) {
         rmSync(agentDir, { recursive: true, force: true })

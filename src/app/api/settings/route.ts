@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { restartGateway } from '@/lib/gateway'
+import os from 'os'
 
 // Ensure settings table exists - SQLite compatible version
 function ensureSettingsTable() {
@@ -40,7 +41,8 @@ function ensureSettingsTable() {
 
 // Get ClawHub config directory
 function getClawhubConfigDir(): string {
-  return join(process.env.HOME || '/home/bullrom', '.config', 'clawhub')
+  const HOME = process.env.HOME || os.homedir()
+  return join(HOME, '.config', 'clawhub')
 }
 
 // Ensure ClawHub config directory exists

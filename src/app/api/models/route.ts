@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
 import { readFileSync } from 'fs'
 import type { NextRequest } from 'next/server'
-
-const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
+import { OPENCLAW_CONFIG } from '@/lib/paths'
 
 // In-memory cache
 let modelsCache: { data: any; timestamp: number } = { data: null, timestamp: 0 }

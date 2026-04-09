@@ -5,8 +5,7 @@ import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { pool } from '@/lib/db'
 import { getAgentNames } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
-
-const AGENTS_DIR = '/home/bullrom/.openclaw/agents'
+import { AGENTS_DIR } from '@/lib/paths'
 
 // Sessions cache to avoid slow disk reads
 let sessionsCache: { sessions: any[]; timestamp: number } = {

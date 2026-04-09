@@ -4,6 +4,7 @@ import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import type { NextRequest } from 'next/server'
 import { existsSync, readFileSync } from 'fs'
 import path from 'path'
+import { getAgentSessionsDir } from '@/lib/paths'
 
 // Check if message is a real conversation message (user or assistant only)
 function isRealConversationMessage(event: any): boolean {
@@ -52,7 +53,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const conv = convs[0]
     const parts = conv.session_key.split(':')
     const agentId = parts[1] || 'main'
-    const sessionDir = `/home/bullrom/.openclaw/agents/${agentId}/sessions`
+    const sessionDir = getAgentSessionsDir(agentId)
     const sessionFile = conv.session_id 
       ? path.join(sessionDir, `${conv.session_id}.jsonl`)
       : null

@@ -5,8 +5,7 @@ import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { getAgentNames, getAgentEmojis } from '@/lib/agent-config'
 import { db } from '@/lib/db'
 import type { NextRequest } from 'next/server'
-
-const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
+import { OPENCLAW_CONFIG, getAgentWorkspace } from '@/lib/paths'
 
 function getAgentIdentity(agentId: string): { name: string; emoji: string } {
   const names = getAgentNames()
@@ -25,7 +24,7 @@ function getAgentWorkspaces(): { id: string; workspace: string }[] {
     const agents = config.agents?.list || []
     return agents.map((agent: any) => ({
       id: agent.id,
-      workspace: agent.workspace || `/home/bullrom/.openclaw/workspace-${agent.id}`,
+      workspace: agent.workspace || getAgentWorkspace(agent.id),
     }))
   } catch {
     return []

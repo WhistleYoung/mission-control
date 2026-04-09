@@ -2,9 +2,10 @@
 // This is more portable for open source distribution
 
 import { spawn } from 'child_process'
-import { readFileSync } from 'fs'
-
-const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
+import { readFileSync, existsSync } from 'fs'
+import path from 'path'
+import { OPENCLAW_CONFIG } from './paths'
+import os from 'os'
 
 /**
  * Restart OpenClaw Gateway via WebSocket RPC (no exec, no PATH issues)
@@ -125,7 +126,9 @@ async function restartViaWebSocket(wsUrl: string, token: string): Promise<void> 
 
 // Fallback: use spawn to call openclaw CLI
 function restartViaSpawn(): void {
-  const cmdPaths = ['openclaw', '/home/bullrom/.npm-global/bin/openclaw', '/usr/local/bin/openclaw']
+  const HOME = process.env.HOME || os.homedir()
+  const npmGlobal = process.env.npm_config_prefix || path.join(HOME, '.npm-global')
+  const cmdPaths = ['openclaw', path.join(npmGlobal, 'bin', 'openclaw'), '/usr/local/bin/openclaw']
   
   for (const cmd of cmdPaths) {
     try {

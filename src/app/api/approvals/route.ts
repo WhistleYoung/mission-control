@@ -3,6 +3,7 @@ import { execSync } from 'child_process'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { pool, sql } from '@/lib/db'
 import type { NextRequest } from 'next/server'
+import { PLUGIN_APPROVALS, EXEC_APPROVALS } from '@/lib/paths'
 
 interface ApprovalItem {
   id: string
@@ -144,7 +145,7 @@ export async function GET(request: NextRequest) {
     // plugin.approvals.get not available, try plugin-approvals.json
     try {
       const fs = require('fs')
-      const pluginApprovalsPath = '/home/bullrom/.openclaw/plugin-approvals.json'
+      const pluginApprovalsPath = PLUGIN_APPROVALS
       if (fs.existsSync(pluginApprovalsPath)) {
         const pluginData = JSON.parse(fs.readFileSync(pluginApprovalsPath, 'utf-8'))
         const agents = pluginData.agents || {}
@@ -219,7 +220,7 @@ export async function POST(request: NextRequest) {
       try {
         const fs = require('fs')
         if (kind === 'exec') {
-          const execApprovalsPath = '/home/bullrom/.openclaw/exec-approvals.json'
+          const execApprovalsPath = EXEC_APPROVALS
           if (fs.existsSync(execApprovalsPath)) {
             const data = JSON.parse(fs.readFileSync(execApprovalsPath, 'utf-8'))
             // Try to find the approval

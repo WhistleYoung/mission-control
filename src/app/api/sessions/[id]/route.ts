@@ -4,6 +4,7 @@ import { join } from 'path'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { pool } from '@/lib/db'
 import type { NextRequest } from 'next/server'
+import { AGENTS_DIR } from '@/lib/paths'
 
 // Extract user text from metadata blocks
 function extractUserText(text: string): string {
@@ -53,7 +54,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const { id } = await params
     
     // Try to find the session in different agents
-    const agentsDir = '/home/bullrom/.openclaw/agents'
+    const agentsDir = AGENTS_DIR
     let sessionFile: string | null = null
     let foundAgentId = ''
     

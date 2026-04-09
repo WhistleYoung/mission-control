@@ -3,9 +3,13 @@
  * Uses direct node call to openclaw.mjs for reliability
  */
 import { readFileSync, existsSync } from 'fs'
+import path from 'path'
+import os from 'os'
 
-const OPENCLAW_MJS = '/home/bullrom/.npm-global/lib/node_modules/openclaw/openclaw.mjs'
-const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
+const HOME = process.env.HOME || os.homedir()
+const npmGlobal = process.env.npm_config_prefix || path.join(HOME, '.npm-global')
+const OPENCLAW_MJS = path.join(npmGlobal, 'lib', 'node_modules', 'openclaw', 'openclaw.mjs')
+const OPENCLAW_CONFIG = path.join(HOME, '.openclaw', 'openclaw.json')
 
 interface GatewayConfig {
   host: string

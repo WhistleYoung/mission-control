@@ -4,6 +4,7 @@
  */
 import { readFileSync, existsSync } from 'fs'
 import { join } from 'path'
+import { OPENCLAW_CONFIG } from './paths'
 
 interface AgentInfo {
   id: string
@@ -62,7 +63,7 @@ export function getAgentsList(): AgentInfo[] {
   }
 
   try {
-    const configPath = '/home/bullrom/.openclaw/openclaw.json'
+    const configPath = OPENCLAW_CONFIG
     if (!existsSync(configPath)) {
       return getDefaultAgents()
     }

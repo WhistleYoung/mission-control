@@ -4,9 +4,7 @@ import { join } from 'path'
 import { verifyAuth } from '@/lib/auth'
 import { getAgentNames } from '@/lib/agent-config'
 import { db } from '@/lib/db'
-
-const AGENTS_DIR = '/home/bullrom/.openclaw/agents'
-const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
+import { AGENTS_DIR, OPENCLAW_CONFIG } from '@/lib/paths'
 
 // Get all configured models from openclaw.json
 function getAllConfiguredModels(): Array<{id: string, provider: string}> {

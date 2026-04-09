@@ -5,8 +5,7 @@ import { join } from 'path'
 import { execSync } from 'child_process'
 import { db } from '@/lib/db'
 import type { NextRequest } from 'next/server'
-
-const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
+import { OPENCLAW_CONFIG, getAgentWorkspace } from '@/lib/paths'
 const CACHE_TTL = 5 * 60 * 1000 // 5 minutes cache
 
 // Get all agent workspaces from OpenClaw config
@@ -18,7 +17,7 @@ function getAgentWorkspaces(): { id: string; name: string; workspace: string }[]
     return agents.map((agent: any) => ({
       id: agent.id,
       name: agent.name || agent.id,
-      workspace: agent.workspace || `/home/bullrom/.openclaw/workspace-${agent.id}`,
+      workspace: agent.workspace || getAgentWorkspace(agent.id),
     }))
   } catch (e) {
     console.error('Error reading OpenClaw config:', e)
