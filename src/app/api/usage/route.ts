@@ -266,10 +266,10 @@ export async function GET(request: NextRequest) {
   // Try to read from database first (fast path)
   if (!forceRefresh) {
     const cachedData = readUsageFromDB()
-    if (cachedData && cachedData.totalSessions > 0) {
-      // Trigger background sync (non-blocking) for next time
+    if (cachedData) {
+      // Always return cached data immediately (even if empty)
+      // Trigger background sync for next time
       if (typeof process !== 'undefined') {
-        // Fire and forget - will update cache for next request
         fetch(new URL('/api/usage-sync', request.url), { method: 'POST' }).catch(() => {})
       }
       return NextResponse.json(cachedData)

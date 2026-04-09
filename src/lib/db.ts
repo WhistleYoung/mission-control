@@ -1,9 +1,9 @@
-import Database from 'better-sqlite3'
+import DatabaseConstructor from 'better-sqlite3'
+import type { Database } from 'better-sqlite3'
 import path from 'path'
 import fs from 'fs'
 import bcrypt from 'bcryptjs'
 
-// Database file path
 const DATA_DIR = path.join(process.cwd(), 'data')
 const DB_PATH = path.join(DATA_DIR, 'mission-control.db')
 
@@ -12,16 +12,10 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true })
 }
 
-// Initialize database
-const db = new Database(DB_PATH)
+let dbInstance: Database | null = null; // Use a singleton pattern
 
-// Enable foreign keys
-db.pragma('journal_mode = WAL')
-db.pragma('foreign_keys = ON')
-
-// Initialize tables
-function initializeDatabase() {
-  db.exec(`
+function initializeDatabase(database: Database) { // Accept db instance
+  database.exec(`
     -- Users table
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +133,7 @@ function initializeDatabase() {
       stat_date DATE NOT NULL,
       stat_hour TEXT,
       agent_id TEXT NOT NULL,
+      agent_name TEXT,
       model TEXT NOT NULL,
       provider TEXT NOT NULL,
       input_tokens INTEGER DEFAULT 0,
@@ -198,36 +193,70 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Realtime tasks sync metadata
-    CREATE TABLE IF NOT EXISTS realtime_tasks_sync_meta (
+    -- Skills cache table
+    CREATE TABLE IF NOT EXISTS skills_cache (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      last_sync_at DATETIME
+      skill_name TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      agent_name TEXT,
+      skill_path TEXT,
+      skill_description TEXT,
+      installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(skill_name, agent_id)
     );
-  `)
+
+    -- Memory cache table
+    CREATE TABLE IF NOT EXISTS memory_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id TEXT NOT NULL,
+      agent_name TEXT,
+      memory_type TEXT NOT NULL,
+      content TEXT,
+      file_path TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(agent_id, memory_type)
+    );
+  `);
 
   // Create default admin user if not exists
-  const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get('admin')
-  if (!existingUser) {
-    const passwordHash = bcrypt.hashSync('admin123', 10)
-    db.prepare('INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)').run(
+  const existingUser = database.prepare('SELECT COUNT(*) FROM users WHERE username = ?').get('admin') as { 'COUNT(*)': number };
+  if (existingUser['COUNT(*)'] === 0) {
+    const passwordHash = bcrypt.hashSync('admin123', 10);
+    database.prepare('INSERT INTO users (username, password_hash, display_name) VALUES (?, ?, ?)').run(
       'admin',
       passwordHash,
       '管理员'
-    )
+    );
   }
 }
 
-initializeDatabase()
+export function getDb(): Database { // Export the getDb function
+  if (!dbInstance) {
+    dbInstance = new DatabaseConstructor(DB_PATH);
+    dbInstance.pragma('journal_mode = WAL');
+    dbInstance.pragma('foreign_keys = ON');
+    initializeDatabase(dbInstance); // Initialize when instance is first created
+  }
+  return dbInstance;
+}
+
+// Export db as a Proxy to delay initialization until it's actually accessed
+export const db: Database = new Proxy({} as Database, {
+  get: (target, prop) => {
+    return Reflect.get(getDb(), prop);
+  },
+});
+
 
 // Wrapper to match mysql2/promise interface: [rows, fields]
 function query<T>(sql: string, params: any[] = []): [T[], any] {
-  const stmt = db.prepare(sql)
+  const stmt = db.prepare(sql);
   if (sql.trim().toUpperCase().startsWith('SELECT')) {
-    const rows = stmt.all(...params) as T[]
-    return [rows, undefined as any]
+    const rows = stmt.all(...params) as T[];
+    return [rows, undefined as any];
   } else {
-    const result = stmt.run(...params)
-    return [undefined as any, { insertId: result.lastInsertRowid, affectedRows: result.changes }]
+    const result = stmt.run(...params);
+    return [undefined as any, { insertId: result.lastInsertRowid, affectedRows: result.changes }];
   }
 }
 
@@ -235,35 +264,35 @@ function query<T>(sql: string, params: any[] = []): [T[], any] {
 export const sql = {
   // Insert helper - returns insertId
   insert(table: string, data: Record<string, any>): number {
-    const keys = Object.keys(data)
-    const values = Object.values(data)
-    const placeholders = keys.map(() => '?').join(', ')
-    const result = db.prepare(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`).run(...values)
-    return result.lastInsertRowid as number
+    const keys = Object.keys(data);
+    const values = Object.values(data);
+    const placeholders = keys.map(() => '?').join(', ');
+    const result = db.prepare(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${placeholders})`).run(...values);
+    return result.lastInsertRowid as number;
   },
 
   // Update helper - returns affected rows
   update(table: string, data: Record<string, any>, where: string, whereParams: any[]): number {
-    const keys = Object.keys(data)
-    const values = Object.values(data)
-    const setClause = keys.map(k => `${k} = ?`).join(', ')
-    const result = db.prepare(`UPDATE ${table} SET ${setClause} WHERE ${where}`).run(...values, ...whereParams)
-    return result.changes
+    const keys = Object.keys(data);
+    const values = Object.values(data);
+    const setClause = keys.map(k => `${k} = ?`).join(', ');
+    const result = db.prepare(`UPDATE ${table} SET ${setClause} WHERE ${where}`).run(...values, ...whereParams);
+    return result.changes;
   },
 
   // Delete helper
   delete(table: string, where: string, whereParams: any[]): number {
-    const result = db.prepare(`DELETE FROM ${table} WHERE ${where}`).run(...whereParams)
-    return result.changes
+    const result = db.prepare(`DELETE FROM ${table} WHERE ${where}`).run(...whereParams);
+    return result.changes;
   }
-}
+};
 
 export interface User {
-  id: number
-  username: string
-  password_hash: string
-  display_name: string
-  created_at: Date
+  id: number;
+  username: string;
+  password_hash: string;
+  display_name: string;
+  created_at: Date;
 }
 
 // Re-export pool as db for compatibility with existing code
@@ -271,30 +300,28 @@ export const pool = {
   query,
   // For direct statement execution when needed
   exec(sql: string) {
-    return db.exec(sql)
+    return db.exec(sql);
   },
   prepare(sql: string) {
-    return db.prepare(sql)
+    return db.prepare(sql);
   }
-}
+};
 
 export async function findUserByUsername(username: string): Promise<User | null> {
-  const [rows] = query<User>('SELECT * FROM users WHERE username = ?', [username])
-  return rows.length > 0 ? rows[0] : null
+  const [rows] = query<User>('SELECT * FROM users WHERE username = ?', [username]);
+  return rows.length > 0 ? rows[0] : null;
 }
 
 export async function verifyPassword(inputPassword: string, storedHash: string): Promise<boolean> {
-  return bcrypt.compare(inputPassword, storedHash)
+  return bcrypt.compare(inputPassword, storedHash);
 }
 
 export async function validateCredentials(username: string, password: string): Promise<User | null> {
-  const user = await findUserByUsername(username)
-  if (!user) return null
-  
-  const isValid = await verifyPassword(password, user.password_hash)
-  if (!isValid) return null
-  
-  return user
-}
+  const user = await findUserByUsername(username);
+  if (!user) return null;
 
-export { db }
+  const isValid = await verifyPassword(password, user.password_hash);
+  if (!isValid) return null;
+
+  return user;
+}

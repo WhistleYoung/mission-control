@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
-import { readdirSync, existsSync, readFileSync, mkdirSync, cpSync, constants } from 'fs'
+import { readdirSync, existsSync, readFileSync, mkdirSync, cpSync } from 'fs'
 import { join } from 'path'
 import { execSync } from 'child_process'
+import { db } from '@/lib/db'
 import type { NextRequest } from 'next/server'
 
 const OPENCLAW_CONFIG = '/home/bullrom/.openclaw/openclaw.json'
+const CACHE_TTL = 5 * 60 * 1000 // 5 minutes cache
 
 // Get all agent workspaces from OpenClaw config
 function getAgentWorkspaces(): { id: string; name: string; workspace: string }[] {
@@ -46,41 +48,135 @@ function parseSkillMeta(skillPath: string): { name: string; description: string;
   }
 }
 
-// List installed skills for each agent
-function listInstalledSkills() {
+// Scan skills from filesystem for an agent
+function scanSkillsFromFiles(agentId: string, agentName: string, workspace: string): any[] {
+  const skillsDir = join(workspace, 'skills')
+  const skills: any[] = []
+
+  if (existsSync(skillsDir)) {
+    try {
+      const entries = readdirSync(skillsDir, { withFileTypes: true })
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const skillPath = join(skillsDir, entry.name)
+          const meta = parseSkillMeta(skillPath)
+          skills.push({
+            name: meta.name,
+            description: meta.description,
+            status: meta.status,
+            path: skillPath,
+            directory: entry.name,
+            agentId,
+            agentName,
+          })
+        }
+      }
+    } catch (e) {
+      console.error(`Error reading skills for agent ${agentId}:`, e)
+    }
+  }
+  return skills
+}
+
+// Get skills from SQLite cache
+function getSkillsFromCache(): { agentId: string; agentName: string; skills: any[] }[] {
+  try {
+    const rows = db.prepare('SELECT * FROM skills_cache ORDER BY agent_id, skill_name').all() as any[]
+    if (!rows || rows.length === 0) return []
+
+    // Group by agent
+    const grouped = new Map<string, { agentId: string; agentName: string; skills: any[] }>()
+    for (const row of rows) {
+      if (!grouped.has(row.agent_id)) {
+        grouped.set(row.agent_id, {
+          agentId: row.agent_id,
+          agentName: row.agent_name || row.agent_id,
+          skills: []
+        })
+      }
+      grouped.get(row.agent_id)!.skills.push({
+        name: row.skill_name,
+        description: row.skill_description || '',
+        status: 'ready',
+        path: row.skill_path,
+        directory: row.skill_name,
+        agentId: row.agent_id,
+        agentName: row.agent_name || row.agent_id,
+      })
+    }
+    return Array.from(grouped.values())
+  } catch (e) {
+    console.error('Error reading skills from cache:', e)
+    return []
+  }
+}
+
+// Save skills to SQLite cache
+function saveSkillsToCache(agentId: string, agentName: string, skills: any[]) {
+  try {
+    const insert = db.prepare(`
+      INSERT OR REPLACE INTO skills_cache (skill_name, agent_id, agent_name, skill_path, skill_description)
+      VALUES (?, ?, ?, ?, ?)
+    `)
+
+    const insertMany = db.transaction((s: any[]) => {
+      for (const skill of s) {
+        insert.run(skill.name, agentId, agentName, skill.path || '', skill.description || '')
+      }
+    })
+
+    insertMany(skills)
+
+    // Clear old skills for this agent not in current scan
+    const currentNames = skills.map(s => s.name)
+    if (currentNames.length > 0) {
+      const placeholders = currentNames.map(() => '?').join(',')
+      db.prepare(`DELETE FROM skills_cache WHERE agent_id = ? AND skill_name NOT IN (${placeholders})`).run(agentId, ...currentNames)
+    }
+  } catch (e) {
+    console.error('Error saving skills to cache:', e)
+  }
+}
+
+// List installed skills - read from SQLite, fallback to filesystem
+function listInstalledSkills(forceRefresh = false): { agentId: string; agentName: string; skills: any[] }[] {
+  // Try to get from cache first (unless force refresh)
+  if (!forceRefresh) {
+    const cached = getSkillsFromCache()
+    if (cached.length > 0) {
+      console.log('Skills: returning cached data')
+      return cached
+    }
+  }
+
+  // Scan from filesystem and cache
+  console.log('Skills: scanning filesystem...')
   const agents = getAgentWorkspaces()
   const result: { agentId: string; agentName: string; skills: any[] }[] = []
 
   for (const agent of agents) {
-    const skillsDir = join(agent.workspace, 'skills')
-    const skills: any[] = []
+    const skills = scanSkillsFromFiles(agent.id, agent.name, agent.workspace)
+    if (skills.length > 0) {
+      saveSkillsToCache(agent.id, agent.name, skills)
+      result.push({
+        agentId: agent.id,
+        agentName: agent.name,
+        skills,
+      })
+    }
+  }
 
-    if (existsSync(skillsDir)) {
-      try {
-        const entries = readdirSync(skillsDir, { withFileTypes: true })
-        for (const entry of entries) {
-          if (entry.isDirectory()) {
-            const skillPath = join(skillsDir, entry.name)
-            const meta = parseSkillMeta(skillPath)
-            skills.push({
-              name: meta.name,
-              description: meta.description,
-              status: meta.status,
-              path: skillPath,
-              directory: entry.name,
-            })
-          }
-        }
-      } catch (e) {
-        console.error(`Error reading skills for agent ${agent.id}:`, e)
+  // If no skills found, still cache empty result to avoid repeated scans
+  if (result.length === 0) {
+    for (const agent of agents) {
+      if (!result.some(r => r.agentId === agent.id)) {
+        result.push({
+          agentId: agent.id,
+          agentName: agent.name,
+          skills: [],
+        })
       }
     }
-
-    result.push({
-      agentId: agent.id,
-      agentName: agent.name,
-      skills,
-    })
   }
 
   return result
@@ -101,20 +197,17 @@ function getClawhubToken(): string | undefined {
 function searchClawhub(query: string, apiToken?: string): any[] {
   try {
     let cmd = `clawhub search "${query}"`
-    // Use token from openclaw.json if not provided via API
     const token = apiToken || getClawhubToken()
     if (token) {
       cmd = `CLAWHUB_TOKEN=${token} ${cmd}`
     }
     const output = execSync(cmd, { timeout: 30000 })
     const text = output.toString()
-    
-    // Parse clawhub search output (simple text parsing)
+
     const lines = text.split('\n').filter((l: string) => l.trim())
     const results: any[] = []
-    
+
     for (const line of lines) {
-      // Try to extract skill name and description from search output
       const parts = line.split(/\s{2,}/)
       if (parts.length >= 1) {
         const name = parts[0].trim()
@@ -124,17 +217,13 @@ function searchClawhub(query: string, apiToken?: string): any[] {
         }
       }
     }
-    
+
     return results
   } catch (e: any) {
     console.error('Clawhub search error:', e.message)
-    // Return empty array if clawhub fails
     return []
   }
 }
-
-// ClawHub login
-// (removed - now using API token instead)
 
 // Install a skill to specified agents
 function installSkillToAgents(skillName: string, targetAgents: 'all' | string[]): { success: boolean; message: string; installed: string[]; failed: string[] } {
@@ -142,25 +231,25 @@ function installSkillToAgents(skillName: string, targetAgents: 'all' | string[])
   const installed: string[] = []
   const failed: string[] = []
 
-  // Filter to only target agents
-  const agentsToInstall = targetAgents === 'all' 
-    ? allAgents 
+  const agentsToInstall = targetAgents === 'all'
+    ? allAgents
     : allAgents.filter(a => (targetAgents as string[]).includes(a.id))
 
   for (const agent of agentsToInstall) {
     try {
-      // Ensure skills directory exists
       const skillsDir = join(agent.workspace, 'skills')
       if (!existsSync(skillsDir)) {
         mkdirSync(skillsDir, { recursive: true })
       }
 
-      // Try to install using clawhub
       execSync(`clawhub install ${skillName} --workdir "${agent.workspace}" --dir skills`, { timeout: 60000 })
       installed.push(agent.name)
+
+      // Update cache for this agent
+      const skills = scanSkillsFromFiles(agent.id, agent.name, agent.workspace)
+      saveSkillsToCache(agent.id, agent.name, skills)
+
     } catch (e: any) {
-      const msg = `Failed to install to ${agent.name}: ${e.message}`
-      console.error(msg)
       failed.push(`${agent.name} (${e.message})`)
     }
   }
@@ -169,11 +258,11 @@ function installSkillToAgents(skillName: string, targetAgents: 'all' | string[])
     return { success: false, message: `安装失败: ${failed.join(', ')}`, installed, failed }
   }
 
-  return { 
-    success: true, 
-    message: failed.length === 0 
+  return {
+    success: true,
+    message: failed.length === 0
       ? `成功安装到 ${installed.length} 个Agent: ${installed.join(', ')}`
-      : `安装到 ${installed.length} 个Agent成功, ${failed.length} 个失败: ${failed.join(', ')}`, 
+      : `安装到 ${installed.length} 个Agent成功, ${failed.length} 个失败: ${failed.join(', ')}`,
     installed,
     failed
   }
@@ -196,7 +285,7 @@ function copySkillToAgents(skillDir: string, sourceAgentId: string, targetAgentI
   const failed: string[] = []
 
   for (const targetId of targetAgentIds) {
-    if (targetId === sourceAgentId) continue // Skip self
+    if (targetId === sourceAgentId) continue
 
     const targetAgent = agents.find(a => a.id === targetId)
     if (!targetAgent) {
@@ -212,16 +301,18 @@ function copySkillToAgents(skillDir: string, sourceAgentId: string, targetAgentI
 
       const targetSkillPath = join(targetSkillDir, skillDir)
 
-      // Remove existing skill if present
       if (existsSync(targetSkillPath)) {
         execSync(`rm -rf "${targetSkillPath}"`)
       }
 
-      // Copy skill directory
       cpSync(sourceSkillPath, targetSkillPath, { recursive: true, dereference: true })
       copied.push(targetAgent.name)
+
+      // Update cache for target agent
+      const skills = scanSkillsFromFiles(targetAgent.id, targetAgent.name, targetAgent.workspace)
+      saveSkillsToCache(targetAgent.id, targetAgent.name, skills)
+
     } catch (e: any) {
-      console.error(`Failed to copy skill to ${targetAgent.name}:`, e.message)
       failed.push(`${targetAgent.name} (${e.message})`)
     }
   }
@@ -251,6 +342,12 @@ function deleteSkillFromAgent(skillDir: string, agentId: string): { success: boo
 
   try {
     execSync(`rm -rf "${skillPath}"`)
+
+    // Remove from cache
+    try {
+      db.prepare('DELETE FROM skills_cache WHERE agent_id = ? AND skill_name = ?').run(agentId, skillDir)
+    } catch (e) {}
+
     return { success: true, message: `已从 ${agent.name} 删除技能 ${skillDir}` }
   } catch (e: any) {
     return { success: false, message: `删除失败: ${e.message}` }
@@ -265,20 +362,23 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const action = searchParams.get('action') || 'list'
   const query = searchParams.get('query') || ''
+  const forceRefresh = searchParams.get('refresh') === 'true'
 
   try {
     if (action === 'list') {
-      // List installed skills for all agents
-      const skills = listInstalledSkills()
+      // List installed skills - from SQLite cache (fast)
+      const skills = listInstalledSkills(forceRefresh)
       return NextResponse.json({ success: true, skills })
+
     } else if (action === 'search') {
-      // Search clawhub
+      // Search clawhub (slow, only when explicitly searching)
       if (!query) {
         return NextResponse.json({ error: '搜索关键词不能为空' }, { status: 400 })
       }
       const username = searchParams.get('username') || undefined
       const results = searchClawhub(query, username)
       return NextResponse.json({ success: true, results })
+
     } else if (action === 'agents') {
       // Get all agents with their workspaces
       const agents = getAgentWorkspaces()
@@ -304,7 +404,6 @@ export async function POST(request: NextRequest) {
       if (!skillName) {
         return NextResponse.json({ error: '技能名称不能为空' }, { status: 400 })
       }
-      // targetAgents can be 'all' or string[]
       const targetsRaw = targetAgents
       let targets: string[]
       if (!targetsRaw || targetsRaw === 'all' || (Array.isArray(targetsRaw) && targetsRaw.length === 0)) {

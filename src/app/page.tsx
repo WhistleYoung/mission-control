@@ -4065,7 +4065,7 @@ ${agentsForm.tools || '无'}`
               {/* About */}
               <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 md:p-6">
                 <h3 className="text-lg font-medium text-white mb-4">关于</h3>
-                <p className="text-sm text-gray-400">{projectName || 'Mission Control'} v1.1.1</p>
+                <p className="text-sm text-gray-400">{projectName || 'Mission Control'} v1.1.2</p>
               </div>
             </div>
           )}

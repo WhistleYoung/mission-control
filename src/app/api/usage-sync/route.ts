@@ -115,6 +115,7 @@ export async function POST(request: Request) {
             
             let lastModel = 'unknown'
             let lastProvider = 'unknown'
+            let fileHasUsage = false
             
             for (const line of lines) {
               try {
@@ -128,6 +129,7 @@ export async function POST(request: Request) {
                 if (event.type === 'message' && event.message?.usage) {
                   const usage = parseUsage(event.message)
                   if (usage && usage.totalTokens > 0) {
+                    fileHasUsage = true
                     const timestamp = event.timestamp || event.message.timestamp
                     const hour = toBeijingHour(timestamp ? new Date(timestamp) : new Date())
                     const date = hour.slice(0, 10)
@@ -168,8 +170,40 @@ export async function POST(request: Request) {
                     stats.cache_write += usage.cacheWrite
                     stats.total_tokens += usage.totalTokens
                     stats.cost += usage.cost
-                    stats.session_count++
                   }
+                }
+              } catch {}
+            }
+            
+            // Only count session once per file (not per message)
+            if (fileHasUsage) {
+              const firstLine = lines[0]
+              try {
+                const firstEvent = JSON.parse(firstLine)
+                const timestamp = firstEvent.timestamp || firstEvent.message?.timestamp || Date.now()
+                const hour = toBeijingHour(new Date(timestamp))
+                const date = hour.slice(0, 10)
+                // Find the model/provider for this file's first usage
+                let model = lastModel
+                let provider = lastProvider
+                for (const line of lines) {
+                  try {
+                    const event = JSON.parse(line)
+                    if (event.type === 'message' && event.message?.usage) {
+                      if (event.message.model) model = event.message.model
+                      if (event.message.provider) provider = event.message.provider
+                      else provider = getProvider(event.message.api || 'unknown', model)
+                      break
+                    }
+                    if (event.type === 'model_change') {
+                      if (event.modelId) model = event.modelId
+                      if (event.provider) provider = event.provider
+                    }
+                  } catch {}
+                }
+                const key = `${date}|${hour}|${agentId}|${model}|${provider}`
+                if (statsMap[key]) {
+                  statsMap[key].session_count++
                 }
               } catch {}
             }
@@ -180,11 +214,12 @@ export async function POST(request: Request) {
     
     // Batch upsert to database
     const upsert = db.prepare(`
-      INSERT INTO usage_stats (stat_date, stat_hour, agent_id, model, provider, 
+      INSERT INTO usage_stats (stat_date, stat_hour, agent_id, agent_name, model, provider, 
         input_tokens, output_tokens, cache_read, cache_write, total_tokens, cost, session_count, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(stat_date, stat_hour, agent_id, model, provider) 
       DO UPDATE SET
+        agent_name = excluded.agent_name,
         input_tokens = excluded.input_tokens,
         output_tokens = excluded.output_tokens,
         cache_read = excluded.cache_read,
@@ -198,7 +233,7 @@ export async function POST(request: Request) {
     const insertMany = db.transaction((stats: any[]) => {
       for (const s of Object.values(stats) as any[]) {
         upsert.run(
-          s.stat_date, s.stat_hour, s.agent_id, s.model, s.provider,
+          s.stat_date, s.stat_hour, s.agent_id, s.agent_name, s.model, s.provider,
           s.input_tokens, s.output_tokens, s.cache_read, s.cache_write,
           s.total_tokens, s.cost, s.session_count
         )

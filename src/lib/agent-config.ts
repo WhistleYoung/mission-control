@@ -20,6 +20,8 @@ const CHINESE_ALIASES: Record<string, string> = {
   worker: '壹号牛马',
   devper: '编程小能手',
   codrever: '代码稽核',
+  writer: '写作小能手',
+  shenhe: '版权稽核',
 }
 
 export function getAgentNames(): Record<string, string> {

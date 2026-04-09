@@ -1,5 +1,43 @@
 # Changelog
 
+## [1.1.2] - 2026-04-09
+
+### 架构重构（重大更新）
+- **数据库缓存架构**：为 sessions 和 realtime-tasks 添加 SQLite 缓存，API 响应从秒级提升到毫秒级
+- **WebSocket RPC 替代 CLI**：realtime-tasks 改用 WebSocket RPC 调用 Gateway，更稳定快速
+- **同步机制**：添加 sync API 后台同步任务，会话数据自动同步到本地 SQLite
+
+### 性能优化
+- 添加 API 缓存机制，sessions/usage/realtime-tasks 缓存时间延长到 5 分钟
+- 优化会话文件读取，减少不必要的文件 IO
+- 前端 fastFetch 超时增加到 60 秒，避免 API 慢导致超时
+- 用量数据从 SQLite 读取，秒级响应
+
+### 功能优化
+- 模型用量模块：修复 .deleted/.reset 会话文件的 token 统计
+- 模型用量模块：展示所有 Agent 和模型（包括未使用的）
+- 模型用量模块：每日用量趋势只展示近 10 天数据
+- 模型用量模块：每月用量展示近 3 个月摘要 + 所有月份横向条形图
+- 模型用量模块：每小时 Token 消耗只展示近 24 小时数据
+- 模型用量模块：折线图折点增加鼠标悬停提示
+- 模型用量模块：只显示有实际用量的有效模型
+- 实时任务 API：使用异步 spawn 替代 execSync 避免超时
+- 移除多余的剩余数量提示
+- Agent 和模型列表支持滚动查看
+
+### Bug 修复
+- 修复 realtime-tasks 处理 gateway 返回数据时的循环引用问题
+- 修复 realtime-tasks 使用 execSync 超时问题
+- 修复 .next 缓存损坏导致的页面乱码问题
+
+### UI 优化
+- 手机端自适应布局优化
+- Settings 移到 Tab 最下方
+- 实时会话手机端自适应布局
+- 工具日志板块手机端自适应
+
+---
+
 ## [1.1.1] - 2026-04-07
 
 ### 性能优化
