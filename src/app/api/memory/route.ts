@@ -167,6 +167,16 @@ export async function GET(request: NextRequest) {
     if (!forceRefresh) {
       const cached = getMemoriesFromCache()
       if (cached.length > 0) {
+        // Trigger background sync for next time
+        fetch(new URL('/api/memory', request.url), {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-internal-key': 'internal-sync-key'
+          },
+          body: JSON.stringify({ action: 'sync' })
+        }).catch(() => {})
+        
         // Sort by date descending
         cached.sort((a, b) => b.date.localeCompare(a.date))
         return NextResponse.json(cached)
@@ -197,6 +207,17 @@ export async function GET(request: NextRequest) {
 
 // POST /api/memory - sync cache in background
 export async function POST(request: NextRequest) {
+  // Allow internal background sync without full auth
+  const internalKey = request.headers.get('x-internal-key')
+  if (internalKey === 'internal-sync-key') {
+    try {
+      syncMemoryCache()
+      return NextResponse.json({ success: true })
+    } catch (e) {
+      return NextResponse.json({ error: 'Sync failed' }, { status: 500 })
+    }
+  }
+  
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
