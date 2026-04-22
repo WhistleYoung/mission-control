@@ -128,6 +128,25 @@ interface MemoryEntry {
   preview: string
   type: 'daily' | 'long-term'
   tags: string[]
+  content?: string
+  filePath?: string
+}
+
+interface DreamEntry {
+  id: string
+  agentId: string
+  agentName: string
+  agentEmoji: string
+  timestamp: string
+  phase: 'light' | 'rem'
+  inlinePath: string
+  lineCount: number
+  storageMode: string
+  lightHits?: number
+  remHits?: number
+  lastLightAt?: string
+  preview?: string
+  content?: string
 }
 
 interface Channel {
@@ -1660,7 +1679,7 @@ function Edit3({ className }: { className?: string }) {
 
 export default function MissionControl() {
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState<Tab>('inbox')
+  const [activeTab, setActiveTab] = useState<Tab>('agents')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [activeTaskColumn, setActiveTaskColumn] = useState<string>('backlog')
   const [tasks, setTasks] = useState<Task[]>([])
@@ -1700,10 +1719,18 @@ export default function MissionControl() {
   const [showCreateChannelModal, setShowCreateChannelModal] = useState(false)
   const [activityExpanded, setActivityExpanded] = useState(true)
   const [currentUser, setCurrentUser] = useState<{ username: string; displayName: string } | null>(null)
-  const [projectName, setProjectName] = useState('Mission Control')
+  const [projectName, setProjectName] = useState('OpenClaw Panel')
   const [projectNameLoaded, setProjectNameLoaded] = useState(false)
+  const [openclawPath, setOpenclawPath] = useState('')
+  const [openclawPathLoaded, setOpenclawPathLoaded] = useState(false)
   const [memoryFilter, setMemoryFilter] = useState<MemoryFilter>('all')
   const [memoryAgentFilter, setMemoryAgentFilter] = useState<string>('all')
+  const [memorySubTab, setMemorySubTab] = useState<'memory' | 'dream'>('memory')
+  const [dreams, setDreams] = useState<DreamEntry[]>([])
+  const [selectedMemory, setSelectedMemory] = useState<MemoryEntry | null>(null)
+  const [selectedDream, setSelectedDream] = useState<DreamEntry | null>(null)
+  const [dreamAgentFilter, setDreamAgentFilter] = useState<string>('all')
+  const [dreamPhaseFilter, setDreamPhaseFilter] = useState<'all' | 'light' | 'rem'>('all')
   const [apiStatus, setApiStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const [cronJobs, setCronJobs] = useState<CronJob[]>([])
   const [showCreateCronModal, setShowCreateCronModal] = useState(false)
@@ -1723,7 +1750,7 @@ export default function MissionControl() {
   const [logSubsystems, setLogSubsystems] = useState<string[]>([])
   const [logFilter, setLogFilter] = useState<{ level?: string; subsystem?: string; search?: string }>({})
   const [showSessionDetail, setShowSessionDetail] = useState(false)
-  const [sessionFilter, setSessionFilter] = useState<{ projectId?: number; agentId?: string }>({})
+  const [sessionFilter, setSessionFilter] = useState<{ agentId?: string }>({})
   const [customTags, setCustomTags] = useState<string[]>([])
   const [editingSoulAgent, setEditingSoulAgent] = useState<Agent | null>(null)
   const [editingAgentInfo, setEditingAgentInfo] = useState<{agent: Agent; name: string; emoji: string} | null>(null)
@@ -1791,12 +1818,14 @@ export default function MissionControl() {
   useEffect(() => {
     if (activeTab === 'approvals') {
       if (approvalTab === 'pending') {
+        // Pending: real-time from Gateway (fast, no DB)
         fetch('/api/approvals')
           .then(res => res.json())
           .then(data => { if (data.approvals) setPendingApprovals(data.approvals) })
           .catch(console.error)
       } else {
-        fetch('/api/approvals?history=true')
+        // History: use readonly endpoint to bypass auth
+        fetch('/api/approvals?history=true&readonly=1')
           .then(res => res.json())
           .then(data => { if (data.approvals) setApprovalHistory(data.approvals) })
           .catch(console.error)
@@ -2007,7 +2036,9 @@ export default function MissionControl() {
       fastFetch('/api/models-config').then(data => { if (data?.models) setModelsConfig(data) })
     },
     memory: () => {
+      // Read directly from files (always up-to-date) + backup to cache
       fastFetch('/api/memory').then(data => { if (Array.isArray(data)) setMemories(data) })
+      fastFetch('/api/dreams').then(data => { if (Array.isArray(data)) setDreams(data) })
     },
     channels: () => {
       fastFetch('/api/channels').then(data => { if (Array.isArray(data)) setChannels(data) })
@@ -2039,6 +2070,10 @@ export default function MissionControl() {
           setProjectName(data.projectName)
           setProjectNameLoaded(true)
           document.title = data.projectName
+        }
+        if (data?.openclawPath) {
+          setOpenclawPath(data.openclawPath)
+          setOpenclawPathLoaded(true)
         }
       }),
     ]).catch(e => console.error('Core data fetch error', e))
@@ -2625,7 +2660,7 @@ ${agentsForm.tools || '无'}`
         </button>
         <div className="flex items-center gap-2">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">🦞</div>
-          <span className="font-semibold text-white text-sm">{projectName || 'Mission Control'}</span>
+          <span className="font-semibold text-white text-sm">{projectName || 'OpenClaw Panel'}</span>
         </div>
         <div className="w-10" />
       </header>
@@ -2638,14 +2673,12 @@ ${agentsForm.tools || '无'}`
             <div className="p-4 border-b border-gray-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">🦞</div>
-                <span className="font-semibold text-white">{projectName || 'Mission Control'}</span>
+                <span className="font-semibold text-white">{projectName || 'OpenClaw Panel'}</span>
               </div>
               <button onClick={() => setMobileMenuOpen(false)} className="p-2 hover:bg-gray-800 rounded-lg"><X className="w-5 h-5 text-gray-400" /></button>
             </div>
             <nav className="flex-1 p-2 overflow-auto">
               {[
-                { id: 'inbox', label: '任务看板', icon: Inbox },
-                { id: 'projects', label: '项目', icon: FolderKanban },
                 { id: 'agents', label: '员工', icon: Users },
                 { id: 'models', label: '模型', icon: Cpu },
                 { id: 'skills', label: '技能', icon: Sparkles },
@@ -2690,13 +2723,11 @@ ${agentsForm.tools || '无'}`
         <div className="p-4 border-b border-gray-800">
           <div className="flex items-center gap-2">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center text-lg">🦞</div>
-            <span className="font-semibold text-white">{projectName || 'Mission Control'}</span>
+            <span className="font-semibold text-white">{projectName || 'OpenClaw Panel'}</span>
           </div>
         </div>
         <nav className="flex-1 p-2">
           {[
-            { id: 'inbox', label: '任务看板', icon: Inbox },
-            { id: 'projects', label: '项目', icon: FolderKanban },
             { id: 'agents', label: '员工', icon: Users },
             { id: 'models', label: '模型', icon: Cpu },
             { id: 'skills', label: '技能', icon: Sparkles },
@@ -2740,8 +2771,6 @@ ${agentsForm.tools || '无'}`
         <header className="hidden md:flex h-14 border-b border-gray-800 items-center justify-between px-6 bg-gray-950">
           <div className="flex items-center gap-4">
             <h1 className="text-lg font-semibold text-white">
-              {activeTab === 'inbox' && '任务看板'}
-              {activeTab === 'projects' && '项目'}
               {activeTab === 'agents' && '员工'}
               {activeTab === 'skills' && '技能'}
               {activeTab === 'memory' && '记忆'}
@@ -2754,8 +2783,6 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'approvals' && '权限审核'}
             </h1>
             <span className="text-sm text-gray-500">
-              {activeTab === 'inbox' && `${tasks.length} 个任务`}
-              {activeTab === 'projects' && `${projects.length} 个项目`}
               {activeTab === 'agents' && `${agents.length} 个员工`}
               {activeTab === 'skills' && `${skills.length} 个技能`}
               {activeTab === 'realtime' && `${realtimeSessions.length} 条会话`}
@@ -2779,8 +2806,6 @@ ${agentsForm.tools || '无'}`
               />
               <Search className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 z-10" />
             </div>
-            {activeTab === 'inbox' && <button onClick={() => setShowCreateModal(true)} className="linear-btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />新建任务</button>}
-            {activeTab === 'projects' && <button onClick={() => setShowCreateProjectModal(true)} className="linear-btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />新建项目</button>}
             {activeTab === 'agents' && <button onClick={() => setShowCreateAgentModal(true)} className="linear-btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />新建员工</button>}
             {activeTab === 'timing' && <button onClick={() => setShowCreateCronModal(true)} className="linear-btn-primary flex items-center gap-2"><Plus className="w-4 h-4" />新建任务</button>}
           </div>
@@ -2790,8 +2815,6 @@ ${agentsForm.tools || '无'}`
         <header className="md:hidden border-b border-gray-800 p-4 bg-gray-950">
           <div className="flex items-center justify-between mb-3">
             <h1 className="text-lg font-semibold text-white">
-              {activeTab === 'inbox' && '任务看板'}
-              {activeTab === 'projects' && '项目'}
               {activeTab === 'agents' && '员工'}
               {activeTab === 'skills' && '技能'}
               {activeTab === 'memory' && '记忆'}
@@ -2803,8 +2826,6 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'approvals' && '权限审核'}
             </h1>
             <span className="text-sm text-gray-500">
-              {activeTab === 'inbox' && `${tasks.length} 个任务`}
-              {activeTab === 'projects' && `${projects.length} 个项目`}
               {activeTab === 'agents' && `${agents.length} 个员工`}
               {activeTab === 'timing' && `${cronJobs.length} 个任务`}
               {activeTab === 'skills' && `${skills.length} 个技能`}
@@ -2816,701 +2837,11 @@ ${agentsForm.tools || '无'}`
               <input type="text" placeholder="搜索..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="linear-input pr-8 w-full text-sm" />
               <Search className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-500" />
             </div>
-            {activeTab === 'inbox' && <button onClick={() => setShowCreateModal(true)} className="linear-btn-primary flex items-center gap-1 px-3 py-2 text-sm"><Plus className="w-4 h-4" />新建</button>}
-            {activeTab === 'projects' && <button onClick={() => setShowCreateProjectModal(true)} className="linear-btn-primary flex items-center gap-1 px-3 py-2 text-sm"><Plus className="w-4 h-4" />新建</button>}
             {activeTab === 'agents' && <button onClick={() => setShowCreateAgentModal(true)} className="linear-btn-primary flex items-center gap-1 px-3 py-2 text-sm"><Plus className="w-4 h-4" />新建</button>}
           </div>
         </header>
 
         <div className="flex-1 overflow-auto">
-          {/* Task Board */}
-          {activeTab === 'inbox' && (
-            <div className="flex h-full">
-              {activityExpanded && (
-                <div className="w-72 border-r border-gray-800 p-4 flex flex-col bg-gray-950">
-                  <button onClick={() => setActivityExpanded(false)} className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-medium text-white flex items-center gap-2"><span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />实时活动</h3>
-                    <ChevronDown className="w-4 h-4 text-gray-500" />
-                  </button>
-                  
-                  {/* Realtime Agent Tasks */}
-                  <div className="mb-4 pb-4 border-b border-gray-800">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs text-gray-500">Agent 状态</span>
-                      <button onClick={async () => {
-                        try {
-                          const res = await fetch('/api/realtime-tasks')
-                          const data = await res.json()
-                          if (data?.tasks) setRealtimeTasks(data.tasks)
-                        } catch (e) { console.log('Failed to refresh', e) }
-                      }} className="p-1 hover:bg-gray-800 rounded">
-                        <RefreshCw className="w-3 h-3 text-gray-500" />
-                      </button>
-                    </div>
-                    {realtimeTasks.length === 0 ? (
-                      <div className="text-xs text-gray-600">无活动</div>
-                    ) : (
-                      <div className="space-y-2">
-                        {realtimeTasks.map((task, i) => {
-                          const agent = agents.find(a => a.id === task.agentId)
-                          return (
-                            <div key={i} className="flex items-center gap-2">
-                              <div className={`w-1.5 h-1.5 rounded-full ${
-                                task.status === 'running' ? 'bg-green-400 animate-pulse' : 
-                                task.status === 'error' ? 'bg-red-400' : 'bg-gray-500'
-                              }`} />
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs text-white truncate">{agent?.identityEmoji || '🤖'} {task.agentName}</span>
-                                  {task.status === 'running' && task.model && (
-                                    <span className="text-xs text-gray-500 truncate">{task.model.split('/').pop()}</span>
-                                  )}
-                                </div>
-                                {task.status === 'running' && task.task && task.task !== task.agentName && (
-                                  <p className="text-xs text-gray-500 truncate">{task.task}</p>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                  
-                  {/* Recent Tasks */}
-                  <div className="text-xs text-gray-500 mb-2">最近任务</div>
-                  <div className="flex-1 space-y-3 overflow-auto">
-                    {tasks.slice(0, 10).map(task => (
-                      <div key={task.id} className="text-sm">
-                        <div className="flex items-center gap-2 text-gray-500 text-xs mb-1">
-                          <span>{new Date(task.updated_at).toLocaleTimeString()}</span>
-                          <span className={`px-1.5 py-0.5 rounded text-xs ${task.assignee_type === 'ai' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'}`}>{task.assignee_type === 'ai' ? 'AI' : 'Human'}</span>
-                        </div>
-                        <p className="text-gray-300">{task.title}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div className="flex-1 p-4 overflow-x-auto md:overflow-visible">
-                {!activityExpanded && <button onClick={() => setActivityExpanded(true)} className="flex items-center gap-2 text-sm text-gray-500 hover:text-white mb-4"><Activity className="w-4 h-4" />显示活动流</button>}
-                
-                {/* Mobile: Tab navigation for columns */}
-                <div className="md:hidden mb-4">
-                  <div className="flex gap-2 overflow-x-auto pb-2">
-                    {Object.entries(statusConfig).map(([status, config]) => {
-                      const columnTasks = getTasksByStatus(status as TaskStatus)
-                      return (
-                        <button key={status} onClick={() => setActiveTaskColumn(status)} className={`px-4 py-2 rounded-lg text-sm whitespace-nowrap ${activeTaskColumn === status ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400'}`}>
-                          {config.label} ({columnTasks.length})
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-                
-                {/* Desktop: All columns side by side */}
-                <div className="hidden md:flex gap-4 h-full">
-                  {Object.entries(statusConfig).map(([status, config]) => {
-                    const columnTasks = getTasksByStatus(status as TaskStatus)
-                    return (
-                      <div key={status} className="w-72 flex flex-col bg-gray-900/50 rounded-xl border border-gray-800" onDrop={e => handleDrop(e, status as TaskStatus)} onDragOver={handleDragOver}>
-                        <div className="p-3 border-b border-gray-800 flex items-center justify-between">
-                          <h3 className="text-sm font-medium text-white flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${config.color.replace('border-', 'bg-')}`} />{config.label}</h3>
-                          <span className="text-xs text-gray-500 bg-gray-850 px-2 py-0.5 rounded">{columnTasks.length}</span>
-                        </div>
-                        <div className="flex-1 p-2 space-y-2 overflow-auto">
-                          {columnTasks.map(task => (
-                            <div key={task.id} draggable onDragStart={e => handleDragStart(e, task.id)} className="cursor-grab">
-                              <TaskCard task={task} onDelete={handleDeleteTask} />
-                            </div>
-                          ))}
-                          {columnTasks.length === 0 && <div className="text-center py-8 text-gray-600 text-sm">暂无任务</div>}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-                
-                {/* Mobile: Single column view */}
-                <div className="md:hidden">
-                  {Object.entries(statusConfig).map(([status, config]) => {
-                    const columnTasks = getTasksByStatus(status as TaskStatus)
-                    if (activeTaskColumn !== status) return null
-                    return (
-                      <div key={status} className="flex flex-col bg-gray-900/50 rounded-xl border border-gray-800" onDrop={e => handleDrop(e, status as TaskStatus)} onDragOver={handleDragOver}>
-                        <div className="p-3 border-b border-gray-800 flex items-center justify-between">
-                          <h3 className="text-sm font-medium text-white flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${config.color.replace('border-', 'bg-')}`} />{config.label}</h3>
-                          <span className="text-xs text-gray-500 bg-gray-850 px-2 py-0.5 rounded">{columnTasks.length}</span>
-                        </div>
-                        <div className="flex-1 p-2 space-y-2 overflow-auto max-h-[60vh]">
-                          {columnTasks.map(task => (
-                            <div key={task.id} draggable onDragStart={e => handleDragStart(e, task.id)} className="cursor-grab">
-                              <TaskCard task={task} onDelete={handleDeleteTask} />
-                            </div>
-                          ))}
-                          {columnTasks.length === 0 && <div className="text-center py-8 text-gray-600 text-sm">暂无任务</div>}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Usage Panel */}
-          {activeTab === 'usage' && (
-            <div className="p-4 md:p-6 overflow-auto">
-              {/* Summary Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
-                      <TrendingUp className="w-5 h-5 text-blue-400" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">总 Token 数</p>
-                      <p className="text-xl font-semibold text-white">{usageData?.total.totalTokens.toLocaleString() || 0}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-gray-500">
-                    <span>输入: {(usageData?.total.inputTokens || 0).toLocaleString()}</span>
-                    <span>输出: {(usageData?.total.outputTokens || 0).toLocaleString()}</span>
-                  </div>
-                </div>
-
-                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center">
-                      <Cpu className="w-5 h-5 text-green-400" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">预估费用</p>
-                      <p className="text-xl font-semibold text-white">${(usageData?.total.cost || 0).toFixed(4)}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs text-gray-500">
-                    <span>缓存读: {(usageData?.total.cacheRead || 0).toLocaleString()}</span>
-                    <span>缓存写: {(usageData?.total.cacheWrite || 0).toLocaleString()}</span>
-                  </div>
-                </div>
-
-                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
-                      <MessageSquare className="w-5 h-5 text-purple-400" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">会话数</p>
-                      <p className="text-xl font-semibold text-white">{usageData?.totalSessions || 0}</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-lg bg-orange-500/20 flex items-center justify-center">
-                      <Bot className="w-5 h-5 text-orange-400" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">Agent 数</p>
-                      <p className="text-xl font-semibold text-white">{usageData?.agents.length || 0}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* By Agent */}
-                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                  <h3 className="text-white font-semibold mb-4">按 Agent 分组</h3>
-                  <div className="h-80 overflow-y-auto space-y-3 pr-2 scrollbar-thin">
-                    {(usageData?.agents || []).map((agent: any) => (
-                      <div key={agent.agentId} className={`bg-gray-800/50 rounded-lg p-3 ${agent.totalTokens === 0 ? 'opacity-50' : ''}`}>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <Bot className="w-4 h-4 text-blue-400" />
-                            <span className="text-white text-sm font-medium">{agent.agentName}</span>
-                            {agent.totalTokens === 0 && <span className="text-xs text-gray-600">(未使用)</span>}
-                          </div>
-                          <span className="text-xs text-gray-500">{agent.sessionCount} 会话</span>
-                        </div>
-                        {/* Token bar */}
-                        <div className="h-2 bg-gray-700 rounded-full overflow-hidden mb-2">
-                          <div 
-                            className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all"
-                            style={{ width: `${usageData?.total.totalTokens ? Math.min(100, (agent.totalTokens / usageData.total.totalTokens) * 100) : 0}%` }}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-gray-400">{agent.totalTokens.toLocaleString()} tokens</span>
-                          <span className="text-gray-500">${agent.cost.toFixed(4)}</span>
-                        </div>
-                        {/* Model breakdown */}
-                        {agent.models.length > 1 && (
-                          <div className="mt-2 pl-4 border-l-2 border-gray-700">
-                            {agent.models.slice(0, 3).map((model: any) => (
-                              <div key={model.model} className="flex items-center justify-between text-xs py-1">
-                                <span className="text-gray-500 truncate max-w-[120px]">{model.model}</span>
-                                <span className="text-gray-600">{model.totalTokens.toLocaleString()}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    {(!usageData?.agents || usageData.agents.length === 0) && (
-                      <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* By Model */}
-                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                  <h3 className="text-white font-semibold mb-4">按模型分组</h3>
-                  <div className="h-80 overflow-y-auto space-y-3 pr-2 scrollbar-thin">
-                    {(usageData?.models || []).map((model: any) => (
-                      <div key={`${model.provider}:${model.model}`} className={`bg-gray-800/50 rounded-lg p-3 ${model.totalTokens === 0 ? 'opacity-50' : ''}`}>
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <Cpu className="w-4 h-4 text-green-400" />
-                            <span className="text-white text-sm font-medium truncate max-w-[160px]">{model.model}</span>
-                            <span className="text-xs text-gray-500">({model.provider})</span>
-                            {model.totalTokens === 0 && <span className="text-xs text-gray-600">(未使用)</span>}
-                          </div>
-                          <span className="text-xs text-gray-500">{model.sessionCount} 会话</span>
-                        </div>
-                        {/* Token bar */}
-                        <div className="h-2 bg-gray-700 rounded-full overflow-hidden mb-2">
-                          <div 
-                            className="h-full bg-gradient-to-r from-green-500 to-emerald-400 rounded-full transition-all"
-                            style={{ width: `${usageData?.total.totalTokens ? Math.min(100, (model.totalTokens / usageData.total.totalTokens) * 100) : 0}%` }}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-gray-400">{model.totalTokens.toLocaleString()} tokens</span>
-                          <span className="text-gray-500">${model.cost.toFixed(4)}</span>
-                        </div>
-                      </div>
-                    ))}
-                    {(!usageData?.models || usageData.models.length === 0) && (
-                      <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Hourly Usage Line Chart */}
-              <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                <h3 className="text-white font-semibold mb-4">每小时 Token 消耗</h3>
-                {usageData?.hourly && usageData.hourly.length > 1 ? (
-                  <div className="relative h-40 w-full">
-                    <svg className="w-full h-full" viewBox="0 0 800 160" preserveAspectRatio="none">
-                      {/* Grid lines */}
-                      {[0, 40, 80, 120, 160].map((y, i) => (
-                        <line key={i} x1="40" y1={y} x2="800" y2={y} stroke="#374151" strokeWidth="1" />
-                      ))}
-                      {/* Y-axis labels */}
-                      {(() => {
-                        const maxTokens = Math.max(...(usageData?.hourly || []).map((h: any) => h.totalTokens), 1)
-                        return [0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
-                          const value = Math.round(maxTokens * ratio)
-                          const y = 160 - (ratio * 140) - 10
-                          return (
-                            <text key={i} x="35" y={y + 4} fill="#6B7280" fontSize="10" textAnchor="end">
-                              {value >= 1000 ? `${Math.round(value / 1000)}k` : value}
-                            </text>
-                          )
-                        })
-                      })()}
-                      {/* Line path */}
-                      {(() => {
-                        const hours = [...(usageData?.hourly || [])].sort((a, b) => a.hour.localeCompare(b.hour))
-                        if (hours.length < 2) return null
-                        const maxTokens = Math.max(...hours.map((h: any) => h.totalTokens), 1)
-                        const width = 760
-                        const height = 140
-                        const paddingLeft = 40
-                        const paddingTop = 10
-                        
-                        const points = hours.map((h: any, i: number) => {
-                          const x = paddingLeft + (i / (hours.length - 1)) * width
-                          const y = paddingTop + height - (h.totalTokens / maxTokens) * height
-                          return `${x},${y}`
-                        })
-                        
-                        const pathD = `M ${points.join(' L ')}`
-                        
-                        // Area fill path
-                        const areaD = `M ${paddingLeft},${paddingTop + height} L ${points.join(' L ')} L ${paddingLeft + width},${paddingTop + height} Z`
-                        
-                        return (
-                          <g>
-                            <defs>
-                              <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="#8B5CF6" stopOpacity="0.4" />
-                                <stop offset="100%" stopColor="#8B5CF6" stopOpacity="0.05" />
-                              </linearGradient>
-                            </defs>
-                            {/* Area */}
-                            <path d={areaD} fill="url(#areaGradient)" />
-                            {/* Line */}
-                            <path d={pathD} fill="none" stroke="#8B5CF6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                            {/* Data points */}
-                            {hours.length <= 24 && hours.map((h: any, i: number) => {
-                              const x = paddingLeft + (i / (hours.length - 1)) * width
-                              const y = paddingTop + height - (h.totalTokens / maxTokens) * height
-                              return (
-                                <circle key={i} cx={x} cy={y} r="3" fill="#8B5CF6" className="hover:r-4 transition-all">
-                                  <title>{h.hour}: {h.totalTokens.toLocaleString()} tokens</title>
-                                </circle>
-                              )
-                            })}
-                          </g>
-                        )
-                      })()}
-                      {/* X-axis labels */}
-                      {(() => {
-                        const hours = [...(usageData?.hourly || [])].sort((a, b) => a.hour.localeCompare(b.hour))
-                        if (hours.length < 2) return null
-                        const labelCount = Math.min(8, hours.length)
-                        const step = Math.floor(hours.length / labelCount)
-                        return hours.filter((_: any, i: number) => i % step === 0 || i === hours.length - 1).map((h: any, idx: number, arr: any[]) => {
-                          const originalIndex = hours.indexOf(h)
-                          const x = 40 + (originalIndex / (hours.length - 1)) * 760
-                          const label = h.hour.slice(11, 16)
-                          return (
-                            <text key={idx} x={x} y="158" fill="#6B7280" fontSize="9" textAnchor="middle">
-                              {label}
-                            </text>
-                          )
-                        })
-                      })()}
-                    </svg>
-                  </div>
-                ) : (
-                  <p className="text-gray-500 text-sm text-center py-8">暂无足够数据绘制图表</p>
-                )}
-              </div>
-
-              {/* Daily Usage - Last 10 days */}
-              <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                <h3 className="text-white font-semibold mb-4">每日用量趋势（近10天）</h3>
-                <div className="space-y-2">
-                  {(usageData?.daily || []).map((day: any) => (
-                    <div key={day.date} className="flex items-center gap-4">
-                      <span className="text-gray-500 text-sm w-24">{day.date}</span>
-                      <div className="flex-1 h-6 bg-gray-800 rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full ${day.totalTokens > 0 ? 'bg-gradient-to-r from-purple-500 to-pink-400' : 'bg-gray-700'}`}
-                          style={{ width: `${usageData?.daily[0]?.totalTokens ? Math.min(100, (day.totalTokens / usageData.daily[0].totalTokens) * 100) : 0}%` }}
-                        />
-                      </div>
-                      <span className="text-gray-400 text-sm w-32 text-right">{day.totalTokens.toLocaleString()} tokens</span>
-                      <span className="text-gray-500 text-sm w-20 text-right">${day.cost.toFixed(4)}</span>
-                    </div>
-                  ))}
-                  {(!usageData?.daily || usageData.daily.length === 0) && (
-                    <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Monthly Usage */}
-              <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                <h3 className="text-white font-semibold mb-4">每月用量汇总</h3>
-                {(usageData?.monthly && usageData.monthly.length > 0) ? (
-                  <>
-                    {/* Monthly summary cards */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                      {usageData.monthly.slice(0, 3).map((m: any) => (
-                        <div key={m.month} className="bg-gray-800/50 rounded-lg p-4">
-                          <div className="text-gray-400 text-sm mb-1">{m.month}</div>
-                          <div className="text-2xl font-bold text-white mb-1">{m.totalTokens.toLocaleString()}</div>
-                          <div className="text-gray-500 text-sm">tokens · ${m.cost.toFixed(2)}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {/* Monthly list */}
-                    <div className="space-y-2">
-                      {usageData.monthly.map((m: any) => (
-                        <div key={m.month} className="flex items-center gap-4">
-                          <span className="text-gray-500 text-sm w-20">{m.month}</span>
-                          <div className="flex-1 h-6 bg-gray-800 rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-gradient-to-r from-green-500 to-cyan-400 rounded-full"
-                              style={{ width: `${usageData.monthly[0]?.totalTokens ? Math.min(100, (m.totalTokens / usageData.monthly[0].totalTokens) * 100) : 0}%` }}
-                            />
-                          </div>
-                          <span className="text-gray-400 text-sm w-36 text-right">{m.totalTokens.toLocaleString()} tokens</span>
-                          <span className="text-gray-500 text-sm w-24 text-right">${m.cost.toFixed(2)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Approvals Panel */}
-          {activeTab === 'approvals' && (
-            <div className="p-4 md:p-6">
-              <div className="max-w-4xl">
-                {/* Header */}
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-yellow-500/20 flex items-center justify-center">
-                      <Shield className="w-5 h-5 text-yellow-400" />
-                    </div>
-                    <div>
-                      <h2 className="text-lg font-semibold text-white">权限审核</h2>
-                      <p className="text-xs text-gray-500">管理 Agent 执行权限请求</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      setApprovalTab('pending')
-                      try {
-                        const res = await fetch('/api/approvals')
-                        const data = await res.json()
-                        if (data.approvals) setPendingApprovals(data.approvals)
-                      } catch (e) { console.error('Failed to fetch approvals', e) }
-                    }}
-                    className="linear-btn-secondary flex items-center gap-2"
-                  >
-                    <RefreshCw className="w-4 h-4" />刷新
-                  </button>
-                </div>
-
-                {/* Tab Switcher */}
-                <div className="flex gap-2 mb-6">
-                  <button
-                    onClick={() => {
-                      setApprovalTab('pending')
-                      fetch('/api/approvals')
-                        .then(res => res.json())
-                        .then(data => { if (data.approvals) setPendingApprovals(data.approvals) })
-                        .catch(console.error)
-                    }}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                      approvalTab === 'pending'
-                        ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700'
-                    }`}
-                  >
-                    <Shield className="w-4 h-4 inline mr-2" />待审批 ({pendingApprovals.length})
-                  </button>
-                  <button
-                    onClick={() => {
-                      setApprovalTab('history')
-                      fetch('/api/approvals?history=true')
-                        .then(res => res.json())
-                        .then(data => { if (data.approvals) setApprovalHistory(data.approvals) })
-                        .catch(console.error)
-                    }}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                      approvalTab === 'history'
-                        ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                        : 'bg-gray-800 text-gray-400 border border-gray-700'
-                    }`}
-                  >
-                    <Clock className="w-4 h-4 inline mr-2" />历史记录
-                  </button>
-                </div>
-
-                {/* Pending Approvals */}
-                {approvalTab === 'pending' && (
-                  <div>
-                    {pendingApprovals.length === 0 ? (
-                      <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-8 text-center">
-                        <ShieldCheck className="w-12 h-12 text-gray-600 mx-auto mb-4" />
-                        <h3 className="text-white font-medium mb-2">暂无待审批项</h3>
-                        <p className="text-sm text-gray-500">所有权限请求均已处理</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {pendingApprovals.map((approval, i) => (
-                          <div key={i} className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                            <div className="flex items-start justify-between mb-3">
-                              <div className="flex items-center gap-3">
-                                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                                  approval.kind === 'exec'
-                                    ? 'bg-orange-500/20 text-orange-400'
-                                    : 'bg-purple-500/20 text-purple-400'
-                                }`}>
-                                  {approval.kind === 'exec' ? <Terminal className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
-                                </div>
-                                <div>
-                                  <div className="flex items-center gap-2">
-                                    <span className={`px-2 py-0.5 text-xs rounded ${
-                                      approval.kind === 'exec'
-                                        ? 'bg-orange-500/20 text-orange-400'
-                                        : 'bg-purple-500/20 text-purple-400'
-                                    }`}>
-                                      {approval.kind === 'exec' ? '命令执行' : '插件请求'}
-                                    </span>
-                                    <span className="text-xs text-gray-500">
-                                      {approval.agent_name || approval.agent_id} · {approval.request_type}
-                                    </span>
-                                  </div>
-                                  <p className="text-sm text-white mt-1 font-mono truncate max-w-md">
-                                    {approval.command || approval.description || approval.request_type}
-                                  </p>
-                                  {approval.session_key && (
-                                    <p className="text-xs text-gray-600 mt-1 truncate max-w-md">
-                                      会话: {approval.session_key}
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                              <span className="text-xs text-gray-500">
-                                {new Date(approval.created_at).toLocaleString('zh-CN')}
-                              </span>
-                            </div>
-                            <div className="flex gap-2">
-                              <button
-                                onClick={async () => {
-                                  setIsResolvingApproval(true)
-                                  try {
-                                    await fetch('/api/approvals', {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ id: approval.id, kind: approval.kind, decision: 'allow' }),
-                                    })
-                                    // Refresh pending list
-                                    const res = await fetch('/api/approvals')
-                                    const data = await res.json()
-                                    if (data.approvals) setPendingApprovals(data.approvals)
-                                  } catch (e) { console.error('Failed to resolve approval', e) }
-                                  setIsResolvingApproval(false)
-                                }}
-                                disabled={isResolvingApproval}
-                                className="flex-1 py-2 px-3 bg-green-500/20 hover:bg-green-500/30 text-green-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                              >
-                                <Check className="w-4 h-4 inline mr-1" />运行单次
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  if (!confirm('确定运行全部吗？')) return
-                                  setIsResolvingApproval(true)
-                                  try {
-                                    await fetch('/api/approvals', {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ id: approval.id, kind: approval.kind, decision: 'allow' }),
-                                    })
-                                    // Refresh pending list
-                                    const res = await fetch('/api/approvals')
-                                    const data = await res.json()
-                                    if (data.approvals) setPendingApprovals(data.approvals)
-                                  } catch (e) { console.error('Failed to resolve approval', e) }
-                                  setIsResolvingApproval(false)
-                                }}
-                                disabled={isResolvingApproval}
-                                className="flex-1 py-2 px-3 bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                              >
-                                <Zap className="w-4 h-4 inline mr-1" />运行全部
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  setIsResolvingApproval(true)
-                                  try {
-                                    await fetch('/api/approvals', {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ id: approval.id, kind: approval.kind, decision: 'deny' }),
-                                    })
-                                    // Refresh pending list
-                                    const res = await fetch('/api/approvals')
-                                    const data = await res.json()
-                                    if (data.approvals) setPendingApprovals(data.approvals)
-                                  } catch (e) { console.error('Failed to resolve approval', e) }
-                                  setIsResolvingApproval(false)
-                                }}
-                                disabled={isResolvingApproval}
-                                className="flex-1 py-2 px-3 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                              >
-                                <X className="w-4 h-4 inline mr-1" />拒绝
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* History */}
-                {approvalTab === 'history' && (
-                  <div>
-                    {approvalHistory.length === 0 ? (
-                      <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-8 text-center">
-                        <List className="w-12 h-12 text-gray-600 mx-auto mb-4" />
-                        <h3 className="text-white font-medium mb-2">暂无历史记录</h3>
-                        <p className="text-sm text-gray-500">审批历史将显示在这里</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {approvalHistory.map((record: any, i: number) => (
-                          <div key={i} className="bg-gray-900/50 rounded-lg border border-gray-800 p-3 flex items-center gap-3">
-                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                              record.decision === 'allow'
-                                ? 'bg-green-500/20 text-green-400'
-                                : 'bg-red-500/20 text-red-400'
-                            }`}>
-                              {record.decision === 'allow' ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className={`px-2 py-0.5 text-xs rounded ${
-                                  record.kind === 'exec'
-                                    ? 'bg-orange-500/20 text-orange-400'
-                                    : 'bg-purple-500/20 text-purple-400'
-                                }`}>
-                                  {record.kind === 'exec' ? '命令' : '插件'}
-                                </span>
-                                <span className={`text-xs px-2 py-0.5 rounded ${
-                                  record.decision === 'allow'
-                                    ? 'bg-green-500/20 text-green-400'
-                                    : 'bg-red-500/20 text-red-400'
-                                }`}>
-                                  {record.decision === 'allow' ? '已允许' : '已拒绝'}
-                                </span>
-                                <span className="text-xs text-gray-500">
-                                  by {record.resolved_by || '系统'}
-                                </span>
-                              </div>
-                              <p className="text-sm text-gray-300 truncate font-mono">
-                                {record.command || record.approval_id}
-                              </p>
-                              <p className="text-xs text-gray-600 mt-0.5">
-                                {new Date(record.created_at).toLocaleString('zh-CN')} → {new Date(record.resolved_at).toLocaleString('zh-CN')}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-          {/* Projects */}
-          {activeTab === 'projects' && (
-            <div className="p-4 md:p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl">
-                {projects.map(project => (
-                  <ProjectCard key={project.id} project={project} onDelete={handleDeleteProject} onShowHistory={handleShowProjectHistory} />
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Agents */}
           {activeTab === 'agents' && (
             <AgentGroupsView 
@@ -3903,42 +3234,200 @@ ${agentsForm.tools || '无'}`
           {/* Memory */}
           {activeTab === 'memory' && (
             <div className="p-4 md:p-6">
-              <div className="mb-4">
-                <div className="flex gap-2 overflow-x-auto pb-2 mb-3">
-                  <button onClick={() => setMemoryFilter('all')} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${memoryFilter === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400'}`}>全部</button>
-                  <button onClick={() => setMemoryFilter('daily')} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${memoryFilter === 'daily' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400'}`}>每日</button>
-                  <button onClick={() => setMemoryFilter('long-term')} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${memoryFilter === 'long-term' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400'}`}>长期</button>
-                </div>
-                <div className="flex gap-2 overflow-x-auto pb-2">
-                  <button onClick={() => setMemoryAgentFilter('all')} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${memoryAgentFilter === 'all' ? 'bg-purple-500 text-white' : 'bg-gray-800 text-gray-400'}`}>全部Agent</button>
-                  {agents.map(agent => (
-                    <button key={agent.id} onClick={() => setMemoryAgentFilter(agent.id)} className={`px-3 py-1.5 text-sm rounded-md flex items-center gap-1 whitespace-nowrap ${memoryAgentFilter === agent.id ? 'bg-purple-500 text-white' : 'bg-gray-800 text-gray-400'}`}>
-                      <span>{agent.identityEmoji}</span>{agent.identityName}
-                    </button>
-                  ))}
-                </div>
+              {/* Sub-tabs */}
+              <div className="flex gap-2 mb-4">
+                <button onClick={() => setMemorySubTab('memory')} className={`px-4 py-2 text-sm rounded-lg ${memorySubTab === 'memory' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400'}`}>
+                  📝 记忆
+                </button>
+                <button onClick={() => setMemorySubTab('dream')} className={`px-4 py-2 text-sm rounded-lg ${memorySubTab === 'dream' ? 'bg-purple-500 text-white' : 'bg-gray-800 text-gray-400'}`}>
+                  🌙 梦境
+                </button>
               </div>
-              <div className="space-y-3 max-w-3xl">
-                {memories.filter(m => 
-                  (memoryFilter === 'all' || m.type === memoryFilter) && 
-                  (memoryAgentFilter === 'all' || m.agentId === memoryAgentFilter)
-                ).map(memory => (
-                  <div key={memory.id} className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
-                    <div className="flex flex-wrap items-center gap-2 mb-2">
-                      <span className="text-lg">{memory.agentEmoji}</span>
-                      <span className="text-sm font-medium text-white">{memory.agentName}</span>
-                      <span className="text-gray-600">·</span>
-                      <span className="text-sm text-gray-500">{memory.date}</span>
-                      <span className={`px-2 py-0.5 text-xs rounded ${memory.type === 'daily' ? 'bg-blue-500/20 text-blue-400' : 'bg-green-500/20 text-green-400'}`}>
-                        {memory.type === 'daily' ? '每日' : '长期'}
-                      </span>
+
+              {/* Memory Sub-tab */}
+              {memorySubTab === 'memory' && (
+                <>
+                  <div className="mb-4">
+                    <div className="flex gap-2 overflow-x-auto pb-2 mb-3">
+                      <button onClick={() => setMemoryFilter('all')} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${memoryFilter === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400'}`}>全部</button>
+                      <button onClick={() => setMemoryFilter('daily')} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${memoryFilter === 'daily' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400'}`}>每日</button>
+                      <button onClick={() => setMemoryFilter('long-term')} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${memoryFilter === 'long-term' ? 'bg-blue-500 text-white' : 'bg-gray-800 text-gray-400'}`}>长期</button>
                     </div>
-                    <p className="text-sm text-gray-400 mb-2">{memory.preview}</p>
-                    <div className="flex gap-2 flex-wrap">
-                      {memory.tags.map(tag => <span key={tag} className="px-2 py-0.5 text-xs bg-gray-800 text-gray-400 rounded">{tag}</span>)}
+                    <div className="flex gap-2 overflow-x-auto pb-2">
+                      <button onClick={() => setMemoryAgentFilter('all')} className={`px-3 py-1.5 text-sm rounded-md whitespace-nowrap ${memoryAgentFilter === 'all' ? 'bg-purple-500 text-white' : 'bg-gray-800 text-gray-400'}`}>全部Agent</button>
+                      {agents.map(agent => (
+                        <button key={agent.id} onClick={() => setMemoryAgentFilter(agent.id)} className={`px-3 py-1.5 text-sm rounded-md flex items-center gap-1 whitespace-nowrap ${memoryAgentFilter === agent.id ? 'bg-purple-500 text-white' : 'bg-gray-800 text-gray-400'}`}>
+                          <span>{agent.identityEmoji}</span>{agent.identityName}
+                        </button>
+                      ))}
                     </div>
                   </div>
-                ))}
+                  <div className="space-y-3 max-w-3xl">
+                    {memories.filter(m => 
+                      (memoryFilter === 'all' || m.type === memoryFilter) && 
+                      (memoryAgentFilter === 'all' || m.agentId === memoryAgentFilter)
+                    ).map(memory => (
+                      <div key={memory.id} className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 cursor-pointer hover:border-gray-700" onClick={() => setSelectedMemory(memory)}>
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <span className="text-lg">{memory.agentEmoji}</span>
+                          <span className="text-sm font-medium text-white">{memory.agentName}</span>
+                          <span className="text-gray-600">·</span>
+                          <span className="text-sm text-gray-500">{memory.date}</span>
+                          <span className={`px-2 py-0.5 text-xs rounded ${memory.type === 'daily' ? 'bg-blue-500/20 text-blue-400' : 'bg-green-500/20 text-green-400'}`}>
+                            {memory.type === 'daily' ? '每日' : '长期'}
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-400 mb-2">{memory.preview}</p>
+                        <div className="flex gap-2 flex-wrap">
+                          {memory.tags.map(tag => <span key={tag} className="px-2 py-0.5 text-xs bg-gray-800 text-gray-400 rounded">{tag}</span>)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Dream Sub-tab */}
+              {memorySubTab === 'dream' && (
+                <div>
+                  {/* Stats Summary */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                    <div className="bg-gray-900/50 rounded-lg border border-gray-800 p-3">
+                      <div className="text-2xl font-bold text-white">{dreams.length}</div>
+                      <div className="text-xs text-gray-500">总梦境数</div>
+                    </div>
+                    <div className="bg-gray-900/50 rounded-lg border border-gray-800 p-3">
+                      <div className="text-2xl font-bold text-blue-400">{dreams.filter(d => d.phase === 'light').length}</div>
+                      <div className="text-xs text-gray-500">浅睡眠</div>
+                    </div>
+                    <div className="bg-gray-900/50 rounded-lg border border-gray-800 p-3">
+                      <div className="text-2xl font-bold text-purple-400">{dreams.filter(d => d.phase === 'rem').length}</div>
+                      <div className="text-xs text-gray-500">REM睡眠</div>
+                    </div>
+                    <div className="bg-gray-900/50 rounded-lg border border-gray-800 p-3">
+                      <div className="text-2xl font-bold text-green-400">{[...new Set(dreams.map(d => d.agentId))].length}</div>
+                      <div className="text-xs text-gray-500">Agent数</div>
+                    </div>
+                  </div>
+
+                  {/* Filters */}
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    <select value={dreamAgentFilter} onChange={e => setDreamAgentFilter(e.target.value)} className="bg-gray-800 text-white text-sm px-3 py-1.5 rounded-lg border border-gray-700">
+                      <option value="all">全部Agent</option>
+                      {[...new Set(dreams.map(d => d.agentId))].map(agentId => {
+                        const dream = dreams.find(d => d.agentId === agentId)
+                        return <option key={agentId} value={agentId}>{dream?.agentEmoji} {dream?.agentName}</option>
+                      })}
+                    </select>
+                    <select value={dreamPhaseFilter} onChange={e => setDreamPhaseFilter(e.target.value as any)} className="bg-gray-800 text-white text-sm px-3 py-1.5 rounded-lg border border-gray-700">
+                      <option value="all">全部阶段</option>
+                      <option value="light">💤 浅睡眠</option>
+                      <option value="rem">😴 REM睡眠</option>
+                    </select>
+                  </div>
+
+                  {/* Dream List */}
+                  <div className="space-y-3 max-w-3xl">
+                    {dreams.filter(d => 
+                      (dreamAgentFilter === 'all' || d.agentId === dreamAgentFilter) &&
+                      (dreamPhaseFilter === 'all' || d.phase === dreamPhaseFilter)
+                    ).map(dream => {
+                      const date = dream.timestamp.split('T')[0]
+                      const time = dream.timestamp.split('T')[1]?.substring(0, 5) || ''
+                      return (
+                        <div key={dream.id} className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 cursor-pointer hover:border-gray-700" onClick={() => setSelectedDream(dream)}>
+                          <div className="flex flex-wrap items-center gap-2 mb-2">
+                            <span className="text-lg">{dream.agentEmoji}</span>
+                            <span className="text-sm font-medium text-white">{dream.agentName}</span>
+                            <span className="text-gray-600">·</span>
+                            <span className="text-sm text-gray-400">{date}</span>
+                            <span className="text-gray-600">·</span>
+                            <span className="text-sm text-gray-500">{time}</span>
+                            <span className={`px-2 py-0.5 text-xs rounded ${dream.phase === 'rem' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                              {dream.phase === 'rem' ? 'REM' : '浅睡'}
+                            </span>
+                            <span className="px-2 py-0.5 text-xs bg-gray-800 text-gray-400 rounded">{dream.lineCount}行</span>
+                          </div>
+                          <p className="text-xs text-gray-500 mb-2 truncate">{dream.preview}</p>
+                          <div className="flex gap-4 text-xs text-gray-600">
+                            <span>Light: {dream.lightHits || 0}</span>
+                            <span>REM: {dream.remHits || 0}</span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Memory Detail Modal */}
+          {selectedMemory && (
+            <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setSelectedMemory(null)}>
+              <div className="bg-gray-900 rounded-xl border border-gray-700 w-full max-w-3xl max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-medium text-white">{selectedMemory.agentEmoji} {selectedMemory.agentName}</h3>
+                    <p className="text-sm text-gray-500">{selectedMemory.date} · {selectedMemory.type === 'daily' ? '每日记忆' : '长期记忆'}</p>
+                  </div>
+                  <button onClick={() => setSelectedMemory(null)} className="p-2 hover:bg-gray-800 rounded-lg"><X className="w-5 h-5 text-gray-400" /></button>
+                </div>
+                <div className="p-4 overflow-auto max-h-[60vh]">
+                  <pre className="text-sm text-gray-300 whitespace-pre-wrap font-mono">{selectedMemory.content || selectedMemory.preview}</pre>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Dream Detail Modal */}
+          {selectedDream && (
+            <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setSelectedDream(null)}>
+              <div className="bg-gray-900 rounded-xl border border-gray-700 w-full max-w-3xl max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+                <div className="p-4 border-b border-gray-800 flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-medium text-white">{selectedDream.phase === 'rem' ? '😴 REM睡眠梦境' : '💤 浅睡眠梦境'}</h3>
+                    <p className="text-sm text-gray-500">{selectedDream.timestamp.replace('T', ' ').substring(0, 16)} · {selectedDream.lineCount}行</p>
+                  </div>
+                  <button onClick={() => setSelectedDream(null)} className="p-2 hover:bg-gray-800 rounded-lg"><X className="w-5 h-5 text-gray-400" /></button>
+                </div>
+                <div className="p-4 overflow-auto max-h-[60vh]">
+                  <div className="mb-4 flex gap-4 text-sm">
+                    <span className="text-gray-500">Light hits: <span className="text-blue-400">{selectedDream.lightHits || 0}</span></span>
+                    <span className="text-gray-500">REM hits: <span className="text-purple-400">{selectedDream.remHits || 0}</span></span>
+                    <span className="text-gray-500">存储: <span className="text-gray-400">{selectedDream.storageMode}</span></span>
+                  </div>
+                  <pre className="text-sm text-gray-300 whitespace-pre-wrap font-mono bg-gray-950 p-4 rounded-lg overflow-auto max-h-[50vh]">
+                    {selectedDream.preview || '暂无内容 - 点击刷新按钮加载完整内容'}
+                  </pre>
+                  <button 
+                    onClick={async () => {
+                      try {
+                        const params = new URLSearchParams({
+                          path: selectedDream.inlinePath,
+                          phase: selectedDream.phase
+                        })
+                        const res = await fetch(`/api/dreams/content?${params}`)
+                        const data = await res.json()
+                        if (data.content) {
+                          setSelectedDream({
+                            ...selectedDream,
+                            content: data.content,
+                            lightHits: data.lightHits,
+                            remHits: data.remHits,
+                            lastLightAt: data.lastLightAt,
+                            preview: data.content.substring(0, 300).replace(/[#*`\-]/g, '').trim() + '...'
+                          })
+                        }
+                      } catch (e) {
+                        console.error('Failed to load dream content:', e)
+                      }
+                    }}
+                    className="mt-3 px-4 py-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30"
+                  >
+                    加载完整内容
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -3973,6 +3462,30 @@ ${agentsForm.tools || '无'}`
                       } catch { alert('修改失败') }
                     }} className="linear-btn-primary">保存</button>
                   </div>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1.5">OpenClaw 路径</label>
+                  <div className="flex gap-2">
+                    <input type="text" id="openclawPathInput" defaultValue={openclawPath} className="linear-input flex-1" placeholder="/home/user/.openclaw" />
+                    <button onClick={async () => {
+                      const newPath = (document.getElementById('openclawPathInput') as HTMLInputElement).value
+                      try {
+                        const res = await fetch('/api/settings', {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ openclawPath: newPath }),
+                        })
+                        const data = await res.json()
+                        if (data.success) {
+                          setOpenclawPath(newPath)
+                          alert('OpenClaw 路径修改成功！需要刷新页面才能生效。')
+                        } else {
+                          alert(data.error || '修改失败')
+                        }
+                      } catch { alert('修改失败') }
+                    }} className="linear-btn-primary">保存</button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">默认为 ~/.openclaw，开源部署时可修改为实际路径</p>
                 </div>
               </div>
 
@@ -4065,7 +3578,7 @@ ${agentsForm.tools || '无'}`
               {/* About */}
               <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 md:p-6">
                 <h3 className="text-lg font-medium text-white mb-4">关于</h3>
-                <p className="text-sm text-gray-400">{projectName || 'Mission Control'} v1.1.2</p>
+                <p className="text-sm text-gray-400">{projectName || 'OpenClaw Panel'} v1.1.2</p>
               </div>
             </div>
           )}
@@ -4340,19 +3853,10 @@ ${agentsForm.tools || '无'}`
                         <option value="">全员工</option>
                         {agents.map(a => <option key={a.id} value={a.id}>{a.identityEmoji} {a.identityName}</option>)}
                       </select>
-                      <select 
-                        value={sessionFilter.projectId || ''} 
-                        onChange={e => setSessionFilter({ ...sessionFilter, projectId: e.target.value ? Number(e.target.value) : undefined })}
-                        className="linear-input text-sm"
-                  >
-                    <option value="">全项目</option>
-                    {projects.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
-                  </select>
-                  <button onClick={async () => {
+                      <button onClick={async () => {
                     try {
                       const params = new URLSearchParams()
                       if (sessionFilter.agentId) params.set('agentId', sessionFilter.agentId)
-                      if (sessionFilter.projectId) params.set('projectId', String(sessionFilter.projectId))
                       const res = await fetch(`/api/sessions?${params}`)
                       const data = await res.json()
                       if (Array.isArray(data)) {
@@ -4376,14 +3880,11 @@ ${agentsForm.tools || '无'}`
                 {realtimeSessions
                   .filter(s => {
                     if (sessionFilter.agentId && s.agentId !== sessionFilter.agentId) return false
-                    // Use loose equality for projectId comparison
-                    if (sessionFilter.projectId && String(s.projectId) !== String(sessionFilter.projectId)) return false
                     // Search filter
                     if (searchQuery) {
                       const query = searchQuery.toLowerCase()
                       if (!s.title?.toLowerCase().includes(query) && 
                           !s.agentName?.toLowerCase().includes(query) &&
-                          !s.projectName?.toLowerCase().includes(query) &&
                           !s.id?.toLowerCase().includes(query)) {
                         return false
                       }
@@ -4404,14 +3905,6 @@ ${agentsForm.tools || '无'}`
                         <div>
                           <h4 className="text-white font-medium">{session.title}</h4>
                           <div className="flex items-center gap-2 text-xs text-gray-500">
-                            {session.projectName ? (
-                              <>
-                                <span>{session.projectEmoji} {session.projectName}</span>
-                                <span>·</span>
-                              </>
-                            ) : (
-                              <span className="text-yellow-500">未分类</span>
-                            )}
                             <span>{session.agentName}</span>
                             <span>·</span>
                             <span>{session.messageCount} 条消息</span>
@@ -4431,7 +3924,6 @@ ${agentsForm.tools || '无'}`
                 ))}
                 {realtimeSessions.filter(s => {
                   if (sessionFilter.agentId && s.agentId !== sessionFilter.agentId) return false
-                  if (sessionFilter.projectId && s.projectId !== sessionFilter.projectId) return false
                   return true
                 }).length === 0 && (
                   <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-8 text-center">

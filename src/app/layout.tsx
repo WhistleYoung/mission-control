@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Mission Control - OpenClaw',
+  title: 'OpenClaw Panel - OpenClaw',
   description: 'OpenClaw 可视化任务控制中心',
 }
 

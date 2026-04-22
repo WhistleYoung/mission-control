@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     }
     
     // Get project name from settings
-    let projectName = 'Mission Control'
+    let projectName = 'OpenClaw Panel'
     try {
       const row = db.prepare('SELECT project_name FROM settings WHERE id = 1').get() as any
       if (row?.project_name) {

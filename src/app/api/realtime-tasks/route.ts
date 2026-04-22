@@ -27,7 +27,8 @@ export async function GET(request: NextRequest) {
 
   try {
     // 直接调用 CLI 获取 sessions
-    const sessions: any[] = await gatewayCall('sessions.list', {})
+    const sessionsResult: any = await gatewayCall('sessions.list', {})
+    const sessions: any[] = Array.isArray(sessionsResult) ? sessionsResult : (sessionsResult?.sessions || [])
     
     console.log('sessions.list returned:', JSON.stringify(sessions, null, 2).substring(0, 2000))
 
@@ -36,10 +37,14 @@ export async function GET(request: NextRequest) {
 
     for (const session of sessions) {
       const status = (session.status || '').toLowerCase()
-      const agentId = session.agentId || session.agent?.id || session.agent_id || 'unknown'
       
-      // Determine agent name: priority is agentNames map > session.agent?.name > agentId
-      let agentName = agentNames[agentId] || session.agent?.name || session.agent_name || agentId
+      // Extract agentId from key (format: agent:devper:dingtalk-connector:direct:...)
+      const key = session.key || ''
+      const keyParts = key.split(':')
+      const agentId = keyParts.length >= 2 ? keyParts[1] : 'unknown'
+      
+      // Determine agent name: priority is agentNames map > displayName > agentId
+      let agentName = agentNames[agentId] || session.displayName || agentId
 
       tasks.push({
         sessionKey: session.key || session.sessionKey || session.id || '',

@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { restartGateway } from '@/lib/gateway'
+import { setOpenClawPath } from '@/lib/paths'
 import os from 'os'
 
 // Ensure settings table exists - SQLite compatible version
@@ -16,7 +17,7 @@ function ensureSettingsTable() {
     db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
         id INTEGER PRIMARY KEY DEFAULT 1,
-        project_name TEXT DEFAULT 'Mission Control',
+        project_name TEXT DEFAULT 'OpenClaw Panel',
         show_lobster_module INTEGER DEFAULT 1,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -25,12 +26,18 @@ function ensureSettingsTable() {
     // Insert default row if not exists
     const existing = db.prepare('SELECT id FROM settings WHERE id = 1').get()
     if (!existing) {
-      db.prepare('INSERT INTO settings (id, project_name, show_lobster_module) VALUES (1, ?, 1)').run('Mission Control')
+      db.prepare('INSERT INTO settings (id, project_name, show_lobster_module) VALUES (1, ?, 1)').run('OpenClaw Panel')
     }
 
     // Ensure show_lobster_module column exists (for existing tables)
     try {
       db.exec("ALTER TABLE settings ADD COLUMN show_lobster_module INTEGER DEFAULT 1")
+    } catch (e: any) {
+      // Column might already exist, ignore
+    }
+    // Ensure openclaw_path column exists
+    try {
+      db.exec("ALTER TABLE settings ADD COLUMN openclaw_path TEXT DEFAULT ''")
     } catch (e: any) {
       // Column might already exist, ignore
     }
@@ -112,14 +119,15 @@ export async function GET(request: NextRequest) {
     const { loggedIn: clawhubLoggedIn, user: clawhubUser } = getClawhubStatus()
     
     return NextResponse.json({
-      projectName: row?.project_name || 'Mission Control',
+      projectName: row?.project_name || 'OpenClaw Panel',
       showLobsterModule: row?.show_lobster_module !== 0,
       clawhubLoggedIn,
       clawhubUser,
+      openclawPath: row?.openclaw_path || process.env.OPENCLAW_PATH || '',
     })
   } catch (error) {
     console.error('Failed to fetch settings:', error)
-    return NextResponse.json({ projectName: 'Mission Control', showLobsterModule: true })
+    return NextResponse.json({ projectName: 'OpenClaw Panel', showLobsterModule: true })
   }
 }
 
@@ -130,13 +138,20 @@ export async function PUT(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { projectName, newUsername, showLobsterModule, clawhubApiToken } = body
+    const { projectName, newUsername, showLobsterModule, clawhubApiToken, openclawPath } = body
 
     ensureSettingsTable()
 
     // Update project name
     if (projectName !== undefined) {
       db.prepare('UPDATE settings SET project_name = ? WHERE id = 1').run(projectName)
+    }
+
+    // Update OpenClaw path
+    if (openclawPath !== undefined) {
+      db.prepare('UPDATE settings SET openclaw_path = ? WHERE id = 1').run(openclawPath)
+      // Update the runtime cache
+      setOpenClawPath(openclawPath)
     }
 
     // Update username

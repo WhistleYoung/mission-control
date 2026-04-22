@@ -1,4 +1,4 @@
-# Mission Control
+# OpenClaw Panel
 
 一个现代化的 AI Agent 任务管理与监控平台。
 
@@ -86,7 +86,7 @@
 ```bash
 # 克隆项目
 git clone https://github.com/WhistleYoung/mission-control.git
-cd mission-control
+cd openclaw-panel
 
 # 安装依赖
 npm install
@@ -110,7 +110,7 @@ npm start
 ## 项目结构
 
 ```
-mission-control/
+openclaw-panel/
 ├── src/
 │   ├── app/
 │   │   ├── api/              # API 路由

@@ -4,6 +4,7 @@ import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { pool, sql } from '@/lib/db'
 import type { NextRequest } from 'next/server'
 import { PLUGIN_APPROVALS, EXEC_APPROVALS } from '@/lib/paths'
+import * as fs from 'fs'
 
 interface ApprovalItem {
   id: string
@@ -21,32 +22,183 @@ interface ApprovalItem {
 let approvalsCache: { approvals: ApprovalItem[]; timestamp: number } = { approvals: [], timestamp: 0 }
 const CACHE_TTL = 15000 // 15 seconds
 
+// Cache for logged exec entries from log file
+let execLogCache: { entries: ApprovalItem[]; timestamp: number } = { entries: [], timestamp: 0 }
+const LOG_CACHE_TTL = 60000 // 1 minute
+let lastSyncCount = 0 // Track how many were synced last time
+
+/**
+ * Parse OpenClaw exec logs and extract exec operations
+ * Logs are in /tmp/openclaw/openclaw-YYYY-MM-DD.log
+ */
+function parseExecLogs(): ApprovalItem[] {
+  const entries: ApprovalItem[] = []
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  
+  const logFiles = [
+    `/tmp/openclaw/openclaw-${today.toISOString().split('T')[0]}.log`,
+    `/tmp/openclaw/openclaw-${yesterday.toISOString().split('T')[0]}.log`
+  ]
+  
+  const seenCommands = new Set<string>()
+  
+  for (const logFile of logFiles) {
+    try {
+      if (!fs.existsSync(logFile)) continue
+      
+      const content = fs.readFileSync(logFile, 'utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      const lines = content.split('\n')
+      
+      for (const line of lines) {
+        if (!line.includes('subsystem') || !line.includes('exec')) continue
+        
+        try {
+          const obj = JSON.parse(line)
+          const message = obj['1'] || ''
+          
+          if (!message.startsWith('elevated command ')) continue
+          
+          const command = message.replace(/^elevated command /, '')
+          const logTime = obj._meta?.date || new Date().toISOString()
+          const hash = `${command}-${logTime}`.substring(0, 100)
+          
+          if (seenCommands.has(hash)) continue
+          seenCommands.add(hash)
+          
+          const sessionKey = obj.sessionKey || obj._meta?.sessionKey || ''
+          const agentMatch = sessionKey.match(/agent:([^:]+)/)
+          const agentId = agentMatch ? agentMatch[1] : 'unknown'
+          
+          entries.push({
+            id: `logged-${Buffer.from(hash).toString('base64').substring(0, 16)}`,
+            kind: 'exec',
+            request_type: 'exec',
+            command: command,
+            agent_id: agentId,
+            agent_name: agentId,
+            session_key: sessionKey,
+            created_at: logTime,
+            description: `[日志记录] ${command}`,
+          })
+        } catch (e) {
+          // Skip malformed JSON lines
+        }
+      }
+    } catch (e) {
+      console.log('Error reading log file:', logFile, e)
+    }
+  }
+  
+  entries.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  return entries
+}
+
+/**
+ * Sync new exec logs to database (only new ones)
+ * Returns number of newly synced entries
+ */
+async function syncLogsToDatabase(): Promise<number> {
+  const now = Date.now()
+  
+  // Refresh log cache if stale
+  if ((now - execLogCache.timestamp) > LOG_CACHE_TTL) {
+    execLogCache.entries = parseExecLogs()
+    execLogCache.timestamp = now
+  }
+  
+  let syncedCount = 0
+  
+  // Only sync entries we haven't seen in the last sync
+  // We sync the newest ones that are newer than the oldest already in DB
+  for (const entry of execLogCache.entries) {
+    try {
+      // Check if already exists in DB
+      const [existing] = await pool.query<any[]>(
+        'SELECT id FROM approval_history WHERE command = ? AND created_at = ?',
+        [entry.command, entry.created_at]
+      )
+      if (existing.length === 0) {
+        sql.insert('approval_history', {
+          approval_id: entry.id,
+          kind: 'exec',
+          request_type: 'exec',
+          command: entry.command || '',
+          agent_id: entry.agent_id || 'unknown',
+          session_key: entry.session_key || '',
+          decision: 'logged',
+          resolved_by: 'system',
+          created_at: entry.created_at,
+          resolved_at: entry.created_at,
+        })
+        syncedCount++
+      }
+    } catch (e) {
+      // Ignore duplicate key errors
+    }
+  }
+  
+  lastSyncCount = syncedCount
+  return syncedCount
+}
+
 /**
  * GET /api/approvals
- * Returns pending approval requests from the gateway socket files
+ * 
+ * ?pending=true  (default) - Get real-time pending approvals from Gateway (fast, no DB)
+ * ?history=true  - Load history from DB, sync new logs first
+ * ?sync=true     - Manually trigger log sync
  */
 export async function GET(request: NextRequest) {
-  const auth = verifyAuth(request)
-  const errorResponse = createAuthResponse(auth.authorized, '请先登录')
-  if (errorResponse) return errorResponse
-
   const searchParams = new URL(request.url).searchParams
   const history = searchParams.get('history') === 'true'
-
-  // Return history records
-  if (history) {
+  const sync = searchParams.get('sync') === 'true'
+  
+  // Manual sync trigger - no auth needed, returns sync status
+  if (sync) {
     try {
+      const count = await syncLogsToDatabase()
+      return NextResponse.json({ ok: true, synced: count, total: execLogCache.entries.length })
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e.message }, { status: 500 })
+    }
+  }
+  
+  // Check for readonly history mode (no auth required)
+  const readonly = searchParams.get('readonly') === '1' || searchParams.get('readonly') === 'true'
+  
+  // Auth check for non-readonly requests
+  if (!readonly) {
+    const auth = verifyAuth(request)
+    const errorResponse = createAuthResponse(auth.authorized, '请先登录')
+    if (errorResponse) return errorResponse
+  }
+
+  // ============ HISTORY MODE ============
+  if (history) {
+    // readonly is already checked above, no need to check again
+    try {
+      // First sync new logs to DB
+      await syncLogsToDatabase()
+      
+      // Then fetch from DB
       const [rows] = await pool.query<any[]>(
-        'SELECT * FROM approval_history ORDER BY created_at DESC LIMIT 100',
+        "SELECT * FROM approval_history WHERE decision != 'pending' ORDER BY created_at DESC LIMIT 200",
         []
       )
-      return NextResponse.json({ approvals: rows })
+      return NextResponse.json({ 
+        approvals: rows,
+        synced: lastSyncCount,
+        total: rows.length
+      })
     } catch (error) {
       console.error('Failed to fetch approval history:', error)
       return NextResponse.json({ error: 'Failed to fetch history' }, { status: 500 })
     }
   }
 
+  // ============ PENDING MODE (default) ============
   // Return cached pending approvals if fresh
   const now = Date.now()
   if (approvalsCache.timestamp && (now - approvalsCache.timestamp) < CACHE_TTL) {
@@ -65,14 +217,10 @@ export async function GET(request: NextRequest) {
     
     const execData = JSON.parse(execResult)
     
-    // The exec-approvals.sock file contains pending approval IDs
-    // Read the socket to get actual pending approvals
     if (execData.path) {
-      const fs = require('fs')
       try {
         const approvalData = JSON.parse(fs.readFileSync(execData.path, 'utf-8'))
         
-        // Extract pending approvals from agents config
         const agents = approvalData.agents || {}
         for (const [agentId, agentData] of Object.entries(agents)) {
           const ad = agentData as any
@@ -92,7 +240,6 @@ export async function GET(request: NextRequest) {
           }
         }
         
-        // Also check defaults
         const defaults = approvalData.defaults || {}
         const defaultPending = defaults.pending || []
         for (const item of defaultPending) {
@@ -109,12 +256,10 @@ export async function GET(request: NextRequest) {
           })
         }
       } catch (e: any) {
-        // Socket file not readable, try alternate approach
         console.log('Exec approvals socket not readable:', e?.message)
       }
     }
   } catch (error: any) {
-    // exec.approvals.get not available or failed
     console.log('exec.approvals.get call failed:', error?.message)
   }
 
@@ -142,9 +287,7 @@ export async function GET(request: NextRequest) {
       }
     }
   } catch (error: any) {
-    // plugin.approvals.get not available, try plugin-approvals.json
     try {
-      const fs = require('fs')
       const pluginApprovalsPath = PLUGIN_APPROVALS
       if (fs.existsSync(pluginApprovalsPath)) {
         const pluginData = JSON.parse(fs.readFileSync(pluginApprovalsPath, 'utf-8'))
@@ -175,7 +318,7 @@ export async function GET(request: NextRequest) {
   // Update cache
   approvalsCache = { approvals: pendingApprovals, timestamp: now }
 
-  return NextResponse.json({ approvals: pendingApprovals })
+  return NextResponse.json({ approvals: pendingApprovals, pendingCount: pendingApprovals.length })
 }
 
 /**
@@ -209,21 +352,17 @@ export async function POST(request: NextRequest) {
       ).toString()
       gatewayResult = JSON.parse(output)
     } catch (execError: any) {
-      // If gateway call fails (e.g., unknown/expired id), still record in history
       gatewayResult = { ok: false, error: execError?.message || String(execError) }
     }
 
     // Record in history database
     try {
-      // Try to get current approval info for history
       let approvalInfo: any = { agent_id: 'unknown', session_key: '', command: '' }
       try {
-        const fs = require('fs')
         if (kind === 'exec') {
           const execApprovalsPath = EXEC_APPROVALS
           if (fs.existsSync(execApprovalsPath)) {
             const data = JSON.parse(fs.readFileSync(execApprovalsPath, 'utf-8'))
-            // Try to find the approval
             const agents = data.agents || {}
             for (const [, agentData] of Object.entries(agents)) {
               const ad = agentData as any
@@ -255,6 +394,9 @@ export async function POST(request: NextRequest) {
     } catch (dbError: any) {
       console.error('Failed to record approval history:', dbError)
     }
+
+    // Clear pending cache so next fetch gets fresh data
+    approvalsCache = { approvals: [], timestamp: 0 }
 
     return NextResponse.json({ 
       ok: gatewayResult.ok !== false, 

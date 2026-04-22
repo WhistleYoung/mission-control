@@ -1,61 +1,84 @@
 import { NextResponse } from 'next/server'
-import { readdirSync, readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
-import { getAgentNames, getAgentEmojis } from '@/lib/agent-config'
 import { db } from '@/lib/db'
 import type { NextRequest } from 'next/server'
-import { OPENCLAW_CONFIG, getAgentWorkspace } from '@/lib/paths'
+import { getOpenClawConfig, getAgentWorkspace } from '@/lib/paths'
 
-function getAgentIdentity(agentId: string): { name: string; emoji: string } {
-  const names = getAgentNames()
-  const emojis = getAgentEmojis()
-  return {
-    name: names[agentId] || agentId,
-    emoji: emojis[agentId] || '🤖'
-  }
+interface MemoryEntry {
+  id: string
+  agentId: string
+  agentName: string
+  agentEmoji: string
+  date: string
+  preview: string
+  type: 'daily' | 'long-term'
+  tags: string[]
+  content: string
+  filePath: string
 }
 
-// Get agent workspaces from openclaw.json
-function getAgentWorkspaces(): { id: string; workspace: string }[] {
+function getAgents(): { id: string; name: string; emoji: string }[] {
   try {
-    if (!existsSync(OPENCLAW_CONFIG)) return []
-    const config = JSON.parse(readFileSync(OPENCLAW_CONFIG, 'utf-8'))
+    if (!existsSync(getOpenClawConfig())) return []
+    const config = JSON.parse(readFileSync(getOpenClawConfig(), 'utf-8'))
     const agents = config.agents?.list || []
-    return agents.map((agent: any) => ({
-      id: agent.id,
-      workspace: agent.workspace || getAgentWorkspace(agent.id),
+    return agents.map((a: any) => ({
+      id: a.id,
+      name: a.name || a.id,
+      emoji: a.emoji || '🤖'
     }))
-  } catch {
-    return []
+  } catch { return [] }
+}
+
+// Ensure memory table exists
+function ensureMemoryTable() {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_cache (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        agent_name TEXT,
+        agent_emoji TEXT,
+        date TEXT,
+        memory_type TEXT,
+        content TEXT,
+        file_path TEXT,
+        preview TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+  } catch (e) {
+    console.error('Error creating memory table:', e)
   }
 }
 
-// Read memory from workspace files
-function readMemoryFromWorkspace(workspacePath: string, agentId: string): any[] {
-  const memories: any[] = []
-  const { name: agentName, emoji: agentEmoji } = getAgentIdentity(agentId)
-
-  // Read daily memories from memory/ directory
+// Read memories from workspace files
+function readMemoriesFromWorkspace(workspacePath: string, agentId: string, agentName: string, agentEmoji: string): MemoryEntry[] {
+  const memories: MemoryEntry[] = []
   const memoryDir = join(workspacePath, 'memory')
+
   if (existsSync(memoryDir)) {
     try {
-      const files = readdirSync(memoryDir)
-      for (const file of files.filter(f => f.endsWith('.md'))) {
+      const files = readdirSync(memoryDir).filter(f => f.endsWith('.md'))
+      for (const file of files) {
         const filePath = join(memoryDir, file)
         const content = readFileSync(filePath, 'utf-8')
-        const preview = content.substring(0, 200).replace(/[#*`]/g, '').trim()
+        const dateMatch = file.match(/(\d{4}-\d{2}-\d{2})/)
+        const date = dateMatch ? dateMatch[1] : file.replace('.md', '').substring(0, 10)
+        
         memories.push({
           id: `${agentId}-${file}`,
           agentId,
           agentName,
           agentEmoji,
-          date: file.replace('.md', '').substring(0, 10),
-          preview: preview + (content.length > 200 ? '...' : ''),
+          date,
           type: file.includes('long-term') || file.includes('MEMORY') ? 'long-term' : 'daily',
-          tags: ['日常'],
+          tags: file.includes('long-term') || file.includes('MEMORY') ? ['长期', '重要'] : ['日常'],
           content,
           filePath,
+          preview: content.substring(0, 200).replace(/[#*`]/g, '').trim() + (content.length > 200 ? '...' : ''),
         })
       }
     } catch (e) {
@@ -63,24 +86,28 @@ function readMemoryFromWorkspace(workspacePath: string, agentId: string): any[] 
     }
   }
 
-  // Read MEMORY.md (long-term memory)
   const memFile = join(workspacePath, 'MEMORY.md')
   if (existsSync(memFile)) {
     try {
       const content = readFileSync(memFile, 'utf-8')
-      const preview = content.substring(0, 200).replace(/[#*\n`]/g, ' ').trim()
-      memories.push({
+      const existingIdx = memories.findIndex(m => m.type === 'long-term')
+      const memEntry: MemoryEntry = {
         id: `${agentId}-MEMORY`,
         agentId,
         agentName,
         agentEmoji,
         date: new Date().toISOString().split('T')[0],
-        preview: preview + (content.length > 200 ? '...' : ''),
         type: 'long-term',
         tags: ['长期', '重要'],
         content,
         filePath: memFile,
-      })
+        preview: content.substring(0, 200).replace(/[#*\n`]/g, ' ').trim() + (content.length > 200 ? '...' : ''),
+      }
+      if (existingIdx >= 0) {
+        memories[existingIdx] = memEntry
+      } else {
+        memories.push(memEntry)
+      }
     } catch (e) {
       console.error(`Error reading MEMORY.md for ${agentId}:`, e)
     }
@@ -89,114 +116,47 @@ function readMemoryFromWorkspace(workspacePath: string, agentId: string): any[] 
   return memories
 }
 
-// Get memories from SQLite cache (fast)
-function getMemoriesFromCache() {
-  try {
-    const rows = db.prepare('SELECT * FROM memory_cache ORDER BY agent_id, memory_type').all() as any[]
-    return rows.map(row => ({
-      id: `${row.agent_id}-${row.memory_type}`,
-      agentId: row.agent_id,
-      agentName: row.agent_name || row.agent_id,
-      agentEmoji: '🤖',
-      date: row.file_path ? row.file_path.split('/').pop()?.replace('.md', '').substring(0, 10) || '' : '',
-      preview: (row.content || '').substring(0, 200).replace(/[#*`]/g, '').trim(),
-      type: row.memory_type,
-      tags: row.memory_type === 'long-term' ? ['长期', '重要'] : ['日常'],
-      content: row.content,
-      filePath: row.file_path,
-    }))
-  } catch (e) {
-    console.error('Error reading memory cache:', e)
-    return []
-  }
-}
-
-// Save memories to SQLite cache
-function saveMemoriesToCache(agentId: string, agentName: string, memories: any[]) {
+// Save memories to database (backup mode)
+function saveMemoriesToDb(memories: MemoryEntry[]) {
+  ensureMemoryTable()
+  
   try {
     const insert = db.prepare(`
-      INSERT OR REPLACE INTO memory_cache (agent_id, agent_name, memory_type, content, file_path, updated_at)
-      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      INSERT OR REPLACE INTO memory_cache (id, agent_id, agent_name, agent_emoji, date, memory_type, content, file_path, preview, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `)
 
-    const insertMany = db.transaction((mems: any[]) => {
-      for (const m of mems) {
-        insert.run(agentId, agentName, m.type, m.content || '', m.filePath || '')
-      }
-    })
-
-    insertMany(memories)
-
-    // Clear old memories for this agent
-    const currentTypes = memories.map(m => m.type)
-    if (currentTypes.length > 0) {
-      const placeholders = currentTypes.map(() => '?').join(',')
-      db.prepare(`DELETE FROM memory_cache WHERE agent_id = ? AND memory_type NOT IN (${placeholders})`).run(agentId, ...currentTypes)
+    for (const m of memories) {
+      insert.run(m.id, m.agentId, m.agentName, m.agentEmoji, m.date, m.type, m.content, m.filePath, m.preview)
     }
   } catch (e) {
-    console.error('Error saving memory cache:', e)
+    console.error('Error saving memories to db:', e)
   }
 }
 
-// Sync memories from files to cache (background)
-function syncMemoryCache() {
-  try {
-    const workspaces = getAgentWorkspaces()
-    for (const { id, workspace } of workspaces) {
-      const memories = readMemoryFromWorkspace(workspace, id)
-      if (memories.length > 0) {
-        saveMemoriesToCache(id, memories[0].agentName, memories)
-      }
-    }
-    console.log('Memory cache synced')
-  } catch (e) {
-    console.error('Error syncing memory cache:', e)
-  }
-}
-
+// GET /api/memory - Read from files (always up-to-date) + save to cache
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
 
-  const { searchParams } = new URL(request.url)
-  const forceRefresh = searchParams.get('refresh') === 'true'
-
   try {
-    // Try cache first
-    if (!forceRefresh) {
-      const cached = getMemoriesFromCache()
-      if (cached.length > 0) {
-        // Trigger background sync for next time
-        fetch(new URL('/api/memory', request.url), {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'x-internal-key': 'internal-sync-key'
-          },
-          body: JSON.stringify({ action: 'sync' })
-        }).catch(() => {})
-        
-        // Sort by date descending
-        cached.sort((a, b) => b.date.localeCompare(a.date))
-        return NextResponse.json(cached)
-      }
-    }
+    const agents = getAgents()
+    const memories: MemoryEntry[] = []
 
-    // No cache: read from files and cache
-    const workspaces = getAgentWorkspaces()
-    const memories: any[] = []
-
-    for (const { id, workspace } of workspaces) {
-      const mems = readMemoryFromWorkspace(workspace, id)
+    for (const agent of agents) {
+      const workspace = getAgentWorkspace(agent.id)
+      const mems = readMemoriesFromWorkspace(workspace, agent.id, agent.name, agent.emoji)
       memories.push(...mems)
-      if (mems.length > 0) {
-        saveMemoriesToCache(id, mems[0].agentName, mems)
-      }
     }
 
     // Sort by date descending
     memories.sort((a, b) => b.date.localeCompare(a.date))
+
+    // Also save to cache for backup
+    if (memories.length > 0) {
+      saveMemoriesToDb(memories)
+    }
 
     return NextResponse.json(memories)
   } catch (error) {
@@ -205,32 +165,30 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/memory - sync cache in background
+// POST /api/memory - Force sync to cache
 export async function POST(request: NextRequest) {
-  // Allow internal background sync without full auth
-  const internalKey = request.headers.get('x-internal-key')
-  if (internalKey === 'internal-sync-key') {
-    try {
-      syncMemoryCache()
-      return NextResponse.json({ success: true })
-    } catch (e) {
-      return NextResponse.json({ error: 'Sync failed' }, { status: 500 })
-    }
-  }
-  
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
 
   try {
     const { action } = await request.json()
+    
     if (action === 'sync') {
-      // Background sync
-      syncMemoryCache()
-      return NextResponse.json({ success: true, message: '同步中...' })
+      // Sync all memories to database
+      const agents = getAgents()
+      const allMemories: MemoryEntry[] = []
+      for (const agent of agents) {
+        const workspace = getAgentWorkspace(agent.id)
+        const mems = readMemoriesFromWorkspace(workspace, agent.id, agent.name, agent.emoji)
+        allMemories.push(...mems)
+      }
+      saveMemoriesToDb(allMemories)
+      return NextResponse.json({ success: true, count: allMemories.length })
     }
+
     return NextResponse.json({ error: '未知操作' }, { status: 400 })
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to sync memories' }, { status: 500 })
+    return NextResponse.json({ error: '同步失败' }, { status: 500 })
   }
 }

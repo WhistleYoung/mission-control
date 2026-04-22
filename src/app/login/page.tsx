@@ -18,7 +18,7 @@ export default function LoginPage() {
   const [captchaQuestion, setCaptchaQuestion] = useState('')
   const [captchaInput, setCaptchaInput] = useState('')
   const [loginAttempts, setLoginAttempts] = useState(0)
-  const [projectName, setProjectName] = useState('Mission Control')
+  const [projectName, setProjectName] = useState('OpenClaw Panel')
   
   const fetchCaptcha = async () => {
     try {

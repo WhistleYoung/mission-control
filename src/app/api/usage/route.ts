@@ -261,21 +261,9 @@ export async function GET(request: NextRequest) {
   const searchParams = new URL(request.url).searchParams
   const forceRefresh = searchParams.get('refresh') === 'true'
   
-  // Try to read from database first (fast path)
-  if (!forceRefresh) {
-    const cachedData = readUsageFromDB()
-    if (cachedData) {
-      // Always return cached data immediately (even if empty)
-      // Trigger background sync for next time
-      if (typeof process !== 'undefined') {
-        fetch(new URL('/api/usage-sync', request.url), { method: 'POST' }).catch(() => {})
-      }
-      return NextResponse.json(cachedData)
-    }
-  }
-  
-  // No cache or force refresh: calculate from files (slow path)
-  // After calculating, data will be saved to DB for next request
+  // Always read from files to get latest usage data (cache is unreliable)
+  // 修复：每次都读取最新文件，避免缓存过期导致数据不更新
+  // 同时更新数据库缓存供其他快速读取场景使用
   
   const agentNames = getAgentNames()
   const agentIds = getAgentIds()
@@ -575,6 +563,71 @@ export async function GET(request: NextRequest) {
     daily,
     hourly,
     monthly
+  }
+  
+  // Save to database cache for other fast-read scenarios
+  try {
+    const upsert = db.prepare(`
+      INSERT INTO usage_stats (stat_date, stat_hour, agent_id, agent_name, model, provider, 
+        input_tokens, output_tokens, cache_read, cache_write, total_tokens, cost, session_count, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(stat_date, stat_hour, agent_id, model, provider) 
+      DO UPDATE SET
+        agent_name = excluded.agent_name,
+        input_tokens = excluded.input_tokens,
+        output_tokens = excluded.output_tokens,
+        cache_read = excluded.cache_read,
+        cache_write = excluded.cache_write,
+        total_tokens = excluded.total_tokens,
+        cost = excluded.cost,
+        session_count = excluded.session_count,
+        updated_at = CURRENT_TIMESTAMP
+    `)
+    
+    const agentNames = getAgentNames()
+    const insertMany = db.transaction((items: any[]) => {
+      for (const item of items) {
+        // Daily stats
+        if (item.date) {
+          upsert.run(item.date, item.date + ' 00:00', item.agentId || 'unknown', 
+            agentNames[item.agentId] || item.agentId || 'unknown', 
+            item.model || 'unknown', item.provider || 'unknown',
+            item.inputTokens, item.outputTokens, item.cacheRead, item.cacheWrite,
+            item.totalTokens, item.cost, item.sessionCount || 0)
+        }
+        // Hourly stats
+        if (item.hour) {
+          upsert.run(item.hour.slice(0, 10), item.hour, item.agentId || 'unknown',
+            agentNames[item.agentId] || item.agentId || 'unknown',
+            item.model || 'unknown', item.provider || 'unknown',
+            item.inputTokens, item.outputTokens, item.cacheRead, item.cacheWrite,
+            item.totalTokens, item.cost, item.sessionCount || 0)
+        }
+      }
+    })
+    
+    // Insert all agent-model combinations
+    for (const agent of agents) {
+      for (const model of (agent.models || [])) {
+        upsert.run(
+          new Date().toISOString().slice(0, 10), 
+          new Date().toISOString().slice(0, 10) + ' 00:00',
+          agent.agentId, 
+          agent.agentName,
+          model.model,
+          model.provider,
+          model.inputTokens,
+          model.outputTokens,
+          model.cacheRead,
+          model.cacheWrite,
+          model.totalTokens,
+          model.cost,
+          model.sessionCount || 0
+        )
+      }
+    }
+  } catch (e) {
+    console.error('Failed to save usage to cache:', e)
   }
   
   return NextResponse.json(result)
