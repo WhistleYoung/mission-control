@@ -211,11 +211,13 @@ function searchClawhub(query: string, apiToken?: string): any[] {
         : `npx clawhub search "${query}"`
     }
     
-    const output = isWindows 
-      ? execSync(cmd, { timeout: 30000, shell: 'cmd.exe' })
-      : execSync(cmd, { timeout: 30000 })
+    const output = execSync(cmd, { 
+      timeout: 30000, 
+      shell: isWindows ? 'cmd.exe' : undefined,
+      encoding: 'utf8' as BufferEncoding
+    }) as string
 
-    const text = output.toString()
+    const text = output
 
     const lines = text.split('\n').filter((l: string) => l.trim())
     const results: any[] = []
@@ -259,7 +261,7 @@ function installSkillToAgents(skillName: string, targetAgents: 'all' | string[])
       const installCmd = isWindows 
         ? `npx clawhub install ${skillName} --workdir "${agent.workspace}" --dir skills`
         : `npx clawhub install ${skillName} --workdir "${agent.workspace}" --dir skills`
-      execSync(installCmd, { timeout: 60000, shell: isWindows ? 'cmd.exe' : undefined })
+      execSync(installCmd, { timeout: 60000, shell: isWindows ? 'cmd.exe' : undefined, encoding: 'utf8' })
       installed.push(agent.name)
 
       // Update cache for this agent
