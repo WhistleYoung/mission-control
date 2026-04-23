@@ -195,13 +195,26 @@ function getClawhubToken(): string | undefined {
 // Search clawhub for skills
 function searchClawhub(query: string, apiToken?: string): any[] {
   try {
-    // Use npx to ensure clawhub is found on all platforms
-    let cmd = `npx clawhub search "${query}"`
+    const isWindows = process.platform === 'win32'
     const token = apiToken || getClawhubToken()
-    if (token) {
-      cmd = `set CLAWHUB_TOKEN=${token} && ${cmd}`
+    
+    // Use npx to ensure clawhub is found on all platforms
+    let cmd: string
+    if (isWindows) {
+      cmd = `npx clawhub search "${query}"`
+      if (token) {
+        cmd = `set CLAWHUB_TOKEN=${token} && ${cmd}`
+      }
+    } else {
+      cmd = token 
+        ? `CLAWHUB_TOKEN=${token} npx clawhub search "${query}"` 
+        : `npx clawhub search "${query}"`
     }
-    const output = execSync(cmd, { timeout: 30000, shell: 'cmd.exe' })
+    
+    const output = isWindows 
+      ? execSync(cmd, { timeout: 30000, shell: 'cmd.exe' })
+      : execSync(cmd, { timeout: 30000 })
+
     const text = output.toString()
 
     const lines = text.split('\n').filter((l: string) => l.trim())
@@ -242,7 +255,11 @@ function installSkillToAgents(skillName: string, targetAgents: 'all' | string[])
         mkdirSync(skillsDir, { recursive: true })
       }
 
-      execSync(`clawhub install ${skillName} --workdir "${agent.workspace}" --dir skills`, { timeout: 60000 })
+      const isWindows = process.platform === 'win32'
+      const installCmd = isWindows 
+        ? `npx clawhub install ${skillName} --workdir "${agent.workspace}" --dir skills`
+        : `npx clawhub install ${skillName} --workdir "${agent.workspace}" --dir skills`
+      execSync(installCmd, { timeout: 60000, shell: isWindows ? 'cmd.exe' : undefined })
       installed.push(agent.name)
 
       // Update cache for this agent
