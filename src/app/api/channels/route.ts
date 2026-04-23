@@ -1,10 +1,45 @@
 import { NextResponse } from 'next/server'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { execSync } from 'child_process'
 import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { restartGateway } from '@/lib/gateway'
 import { getAgentNames } from '@/lib/agent-config'
 import type { NextRequest } from 'next/server'
-import { OPENCLAW_CONFIG } from '@/lib/paths'
+import { OPENCLAW_CONFIG, getOpenClawDir } from '@/lib/paths'
+
+// Auto-install dingtalk plugin when first configuring dingtalk channel
+function ensureDingtalkPlugin(): boolean {
+  try {
+    const isWindows = process.platform === 'win32'
+    const configPath = OPENCLAW_CONFIG
+    if (!existsSync(configPath)) return false
+    
+    const config = JSON.parse(readFileSync(configPath, 'utf-8'))
+    const pluginPath = config.plugins?.entries?.['dingtalk-connector']?.installPath
+    
+    // Already installed
+    if (pluginPath && existsSync(pluginPath)) {
+      return true
+    }
+    
+    // Install dingtalk-connector
+    const installCmd = isWindows 
+      ? `npx -y @dingtalk-real-ai/dingtalk-connector install`
+      : `npx -y @dingtalk-real-ai/dingtalk-connector install`
+    
+    console.log('[DingTalk] Auto-installing plugin...')
+    execSync(installCmd, { 
+      timeout: 120000,
+      shell: isWindows ? 'cmd.exe' : undefined,
+      cwd: getOpenClawDir()
+    })
+    console.log('[DingTalk] Plugin installed successfully')
+    return true
+  } catch (e: any) {
+    console.error('[DingTalk] Auto-install failed:', e.message)
+    return false
+  }
+}
 
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
@@ -58,6 +93,11 @@ export async function POST(request: NextRequest) {
     
     if (!channelType || !accountId || !accountData) {
       return NextResponse.json({ error: 'Missing parameters' }, { status: 400 })
+    }
+    
+    // Auto-install dingtalk plugin when configuring dingtalk channel
+    if (channelType === 'dingtalk-connector' || channelType === 'dingtalk') {
+      ensureDingtalkPlugin()
     }
     
     if (existsSync(OPENCLAW_CONFIG)) {
