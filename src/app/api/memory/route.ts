@@ -6,6 +6,11 @@ import { db } from '@/lib/db'
 import type { NextRequest } from 'next/server'
 import { getOpenClawConfig, getAgentWorkspace } from '@/lib/paths'
 
+// Simple in-memory cache
+let cache: { data: any[] | null; timestamp: number } = { data: null, timestamp: 0 }
+const CACHE_TTL_MS = 30000 // 30 seconds
+const DEFAULT_LIMIT = 5000 // Default limit for initial load
+
 interface MemoryEntry {
   id: string
   agentId: string
@@ -116,7 +121,24 @@ function readMemoriesFromWorkspace(workspacePath: string, agentId: string, agent
   return memories
 }
 
-// Save memories to database (backup mode)
+// Read memories from database cache (fast path)
+function readMemoriesFromDb(limit: number = DEFAULT_LIMIT): MemoryEntry[] {
+  try {
+    const rows = db.prepare(`
+      SELECT id, agent_id as agentId, agent_name as agentName, agent_emoji as agentEmoji, 
+        date, memory_type as type, content, file_path as filePath, preview
+      FROM memory_cache
+      ORDER BY date DESC
+      LIMIT ?
+    `).all(limit) as MemoryEntry[]
+    return rows
+  } catch (e) {
+    console.error('Error reading memories from db:', e)
+    return []
+  }
+}
+
+// Save memories to database
 function saveMemoriesToDb(memories: MemoryEntry[]) {
   ensureMemoryTable()
   
@@ -134,12 +156,53 @@ function saveMemoriesToDb(memories: MemoryEntry[]) {
   }
 }
 
-// GET /api/memory - Read from files (always up-to-date) + save to cache
+// GET /api/memory - Read from DB cache first, fallback to files + background sync
+// GET /api/memory - Read from DB cache first, fallback to files + background sync
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
 
+  const searchParams = new URL(request.url).searchParams
+  const limit = parseInt(searchParams.get('limit') || String(DEFAULT_LIMIT)) || DEFAULT_LIMIT
+  const sync = searchParams.get('sync') === 'true' // Force sync from files
+  
+  const now = Date.now()
+  
+  // Check in-memory cache first (30s TTL)
+  if (!sync && cache.data && (now - cache.timestamp) < CACHE_TTL_MS) {
+    return NextResponse.json(cache.data.slice(0, limit))
+  }
+  
+  // Try reading from database first (fast path)
+  if (!sync) {
+    const dbMemories = readMemoriesFromDb(limit)
+    if (dbMemories.length > 0) {
+      // Update in-memory cache
+      cache = { data: dbMemories, timestamp: now }
+      
+      // Trigger background sync (fire and forget)
+      ;(async () => {
+        try {
+          const agents = getAgents()
+          const allMemories: MemoryEntry[] = []
+          for (const agent of agents) {
+            const workspace = getAgentWorkspace(agent.id)
+            const mems = readMemoriesFromWorkspace(workspace, agent.id, agent.name, agent.emoji)
+            allMemories.push(...mems)
+          }
+          allMemories.sort((a, b) => b.date.localeCompare(a.date))
+          saveMemoriesToDb(allMemories)
+        } catch (e) {
+          console.error('Background sync failed:', e)
+        }
+      })()
+      
+      return NextResponse.json(dbMemories)
+    }
+  }
+  
+  // Fallback: read from files (slow path)
   try {
     const agents = getAgents()
     const memories: MemoryEntry[] = []
@@ -153,12 +216,14 @@ export async function GET(request: NextRequest) {
     // Sort by date descending
     memories.sort((a, b) => b.date.localeCompare(a.date))
 
-    // Also save to cache for backup
-    if (memories.length > 0) {
-      saveMemoriesToDb(memories)
-    }
+    // Update cache with full data
+    cache = { data: memories, timestamp: now }
+    
+    // Save to database for future fast reads
+    saveMemoriesToDb(memories)
 
-    return NextResponse.json(memories)
+    // Return limited results
+    return NextResponse.json(memories.slice(0, limit))
   } catch (error) {
     console.error('Failed to fetch memories:', error)
     return NextResponse.json({ error: 'Failed to fetch memories' }, { status: 500 })

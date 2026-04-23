@@ -11,7 +11,7 @@ import {
   TrendingUp,
 } from 'lucide-react'
 
-type Tab = 'inbox' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs' | 'models' | 'approvals' | 'usage'
+type Tab = 'inbox' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs' | 'models' | 'usage'
 type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'in-review' | 'done'
 type Priority = 'urgent' | 'high' | 'medium' | 'low'
 type MemoryFilter = 'daily' | 'long-term' | 'all'
@@ -1698,6 +1698,8 @@ export default function MissionControl() {
   const [showEditModelModal, setShowEditModelModal] = useState(false)
   const [editingModel, setEditingModel] = useState<{providerId: string, model: any} | null>(null)
   const [selectedSkill, setSelectedSkill] = useState<{name: string; description: string; directory: string; sourceAgentId: string; sourceAgentName: string} | null>(null)
+  const [usageAgentsExpanded, setUsageAgentsExpanded] = useState(false)
+  const [usageModelsExpanded, setUsageModelsExpanded] = useState(false)
   const [copyTargetAgents, setCopyTargetAgents] = useState<string[]>([])
   const [isCopying, setIsCopying] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -1767,12 +1769,6 @@ export default function MissionControl() {
   const [soulForm, setSoulForm] = useState({ coreTruths: '', boundaries: '', vibe: '', continuity: '' })
   const [userForm, setUserForm] = useState({ name: '', callName: '', pronouns: '', timezone: '', notes: '', context: '' })
 
-  // Approvals state
-  const [pendingApprovals, setPendingApprovals] = useState<any[]>([])
-  const [approvalHistory, setApprovalHistory] = useState<any[]>([])
-  const [approvalTab, setApprovalTab] = useState<'pending' | 'history'>('pending')
-  const [isResolvingApproval, setIsResolvingApproval] = useState(false)
-
   // Usage state
   const [usageData, setUsageData] = useState<{
     total: { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number }
@@ -1813,25 +1809,6 @@ export default function MissionControl() {
       fetchLogs()
     }
   }, [activeTab])
-
-  // Load approvals when switching to approvals tab
-  useEffect(() => {
-    if (activeTab === 'approvals') {
-      if (approvalTab === 'pending') {
-        // Pending: real-time from Gateway (fast, no DB)
-        fetch('/api/approvals')
-          .then(res => res.json())
-          .then(data => { if (data.approvals) setPendingApprovals(data.approvals) })
-          .catch(console.error)
-      } else {
-        // History: use readonly endpoint to bypass auth
-        fetch('/api/approvals?history=true&readonly=1')
-          .then(res => res.json())
-          .then(data => { if (data.approvals) setApprovalHistory(data.approvals) })
-          .catch(console.error)
-      }
-    }
-  }, [activeTab, approvalTab])
 
   // Load skills when switching to skills tab
   const fetchInstalledSkills = async () => {
@@ -2688,7 +2665,6 @@ ${agentsForm.tools || '无'}`
                 { id: 'realtime', label: '实时会话', icon: Zap },
                 { id: 'logs', label: '工具日志', icon: FileText },
                 { id: 'usage', label: '模型用量', icon: TrendingUp },
-                { id: 'approvals', label: '权限审核', icon: Shield },
                 { id: 'settings', label: '设置', icon: Settings },
               ].map(item => (
                 <button key={item.id} onClick={() => { setActiveTab(item.id as Tab); setMobileMenuOpen(false) }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 ${activeTab === item.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white'}`}>
@@ -2737,7 +2713,6 @@ ${agentsForm.tools || '无'}`
             { id: 'realtime', label: '实时会话', icon: Zap },
             { id: 'logs', label: '工具日志', icon: FileText },
             { id: 'usage', label: '模型用量', icon: TrendingUp },
-            { id: 'approvals', label: '权限审核', icon: Shield },
             { id: 'settings', label: '设置', icon: Settings },
           ].map(item => (
             <button key={item.id} onClick={() => setActiveTab(item.id as Tab)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm mb-1 ${activeTab === item.id ? 'bg-gray-800 text-white' : 'text-gray-400 hover:text-white'}`}>
@@ -2780,7 +2755,6 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'logs' && '工具日志'}
               {activeTab === 'models' && '模型'}
               {activeTab === 'usage' && '模型用量'}
-              {activeTab === 'approvals' && '权限审核'}
             </h1>
             <span className="text-sm text-gray-500">
               {activeTab === 'agents' && `${agents.length} 个员工`}
@@ -2823,7 +2797,6 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'realtime' && '实时会话'}
               {activeTab === 'models' && '模型'}
               {activeTab === 'settings' && '设置'}
-              {activeTab === 'approvals' && '权限审核'}
             </h1>
             <span className="text-sm text-gray-500">
               {activeTab === 'agents' && `${agents.length} 个员工`}
@@ -2937,6 +2910,307 @@ ${agentsForm.tools || '无'}`
                   <p className="text-sm text-gray-500 mb-4">点击「新增模型」添加第一个模型</p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Usage Panel */}
+          {activeTab === 'usage' && (
+            <div className="p-4 md:p-6 overflow-auto">
+              {/* Summary Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center">
+                      <TrendingUp className="w-5 h-5 text-blue-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">总 Token 数</p>
+                      <p className="text-xl font-semibold text-white">{usageData?.total.totalTokens.toLocaleString() || 0}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs text-gray-500">
+                    <span>输入: {(usageData?.total.inputTokens || 0).toLocaleString()}</span>
+                    <span>输出: {(usageData?.total.outputTokens || 0).toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-green-500/20 flex items-center justify-center">
+                      <Cpu className="w-5 h-5 text-green-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">预估费用</p>
+                      <p className="text-xl font-semibold text-white">${(usageData?.total.cost || 0).toFixed(4)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs text-gray-500">
+                    <span>缓存读: {(usageData?.total.cacheRead || 0).toLocaleString()}</span>
+                    <span>缓存写: {(usageData?.total.cacheWrite || 0).toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                      <MessageSquare className="w-5 h-5 text-purple-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">会话数</p>
+                      <p className="text-xl font-semibold text-white">{usageData?.totalSessions || 0}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-orange-500/20 flex items-center justify-center">
+                      <Bot className="w-5 h-5 text-orange-400" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Agent 数</p>
+                      <p className="text-xl font-semibold text-white">{usageData?.agents.length || 0}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* By Agent */}
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-white font-semibold">按 Agent 分组</h3>
+                    {(usageData?.agents?.length || 0) > 3 && (
+                      <button 
+                        onClick={() => setUsageAgentsExpanded(!usageAgentsExpanded)}
+                        className="text-xs text-blue-400 hover:text-blue-300"
+                      >
+                        {usageAgentsExpanded ? '收起' : `展开全部 (${usageData?.agents?.length || 0})`}
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-3">
+                    {(usageAgentsExpanded ? usageData?.agents || [] : (usageData?.agents || []).slice(0, 3)).map((agent: any) => (
+                      <div key={agent.agentId} className="bg-gray-800/50 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <Bot className="w-4 h-4 text-blue-400" />
+                            <span className="text-white text-sm font-medium">{agent.agentName}</span>
+                          </div>
+                          <span className="text-xs text-gray-500">{agent.sessionCount} 会话</span>
+                        </div>
+                        <div className="h-2 bg-gray-700 rounded-full overflow-hidden mb-2">
+                          <div 
+                            className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 rounded-full transition-all"
+                            style={{ width: `${usageData?.total.totalTokens ? Math.min(100, (agent.totalTokens / usageData.total.totalTokens) * 100) : 0}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-400">{agent.totalTokens.toLocaleString()} tokens</span>
+                          <span className="text-gray-500">${agent.cost.toFixed(4)}</span>
+                        </div>
+                        {agent.models.length > 1 && (
+                          <div className="mt-2 pl-4 border-l-2 border-gray-700">
+                            {agent.models.slice(0, 3).map((model: any) => (
+                              <div key={model.model} className="flex items-center justify-between text-xs py-1">
+                                <span className="text-gray-500 truncate max-w-[120px]">{model.model}</span>
+                                <span className="text-gray-600">{model.totalTokens.toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {(!usageData?.agents || usageData.agents.length === 0) && (
+                      <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* By Model */}
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-white font-semibold">按模型分组</h3>
+                    {(usageData?.models?.length || 0) > 3 && (
+                      <button 
+                        onClick={() => setUsageModelsExpanded(!usageModelsExpanded)}
+                        className="text-xs text-green-400 hover:text-green-300"
+                      >
+                        {usageModelsExpanded ? '收起' : `展开全部 (${usageData?.models?.length || 0})`}
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-3">
+                    {(usageModelsExpanded ? usageData?.models || [] : (usageData?.models || []).slice(0, 3)).map((model: any) => (
+                      <div key={`${model.provider}:${model.model}`} className="bg-gray-800/50 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <Cpu className="w-4 h-4 text-green-400" />
+                            <span className="text-white text-sm font-medium truncate max-w-[160px]">{model.model}</span>
+                            <span className="text-xs text-gray-500">({model.provider})</span>
+                          </div>
+                          <span className="text-xs text-gray-500">{model.sessionCount} 会话</span>
+                        </div>
+                        <div className="h-2 bg-gray-700 rounded-full overflow-hidden mb-2">
+                          <div 
+                            className="h-full bg-gradient-to-r from-green-500 to-emerald-400 rounded-full transition-all"
+                            style={{ width: `${usageData?.total.totalTokens ? Math.min(100, (model.totalTokens / usageData.total.totalTokens) * 100) : 0}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-400">{model.totalTokens.toLocaleString()} tokens</span>
+                          <span className="text-gray-500">${model.cost.toFixed(4)}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {(!usageData?.models || usageData.models.length === 0) && (
+                      <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Hourly Usage Line Chart */}
+              <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                <h3 className="text-white font-semibold mb-4">每小时 Token 消耗</h3>
+                {usageData?.hourly && usageData.hourly.length > 1 ? (
+                  <div className="relative h-40 w-full">
+                    <svg className="w-full h-full" viewBox="0 0 800 160" preserveAspectRatio="none">
+                      {[0, 40, 80, 120, 160].map((y, i) => (
+                        <line key={i} x1="40" y1={y} x2="800" y2={y} stroke="#374151" strokeWidth="1" />
+                      ))}
+                      {(() => {
+                        const maxTokens = Math.max(...(usageData?.hourly || []).map((h: any) => h.totalTokens), 1)
+                        return [0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
+                          const value = Math.round(maxTokens * ratio)
+                          const y = 160 - (ratio * 140) - 10
+                          return (
+                            <text key={i} x="35" y={y + 4} fill="#6B7280" fontSize="10" textAnchor="end">
+                              {value >= 1000 ? `${Math.round(value / 1000)}k` : value}
+                            </text>
+                          )
+                        })
+                      })()}
+                      {(() => {
+                        const hours = [...(usageData?.hourly || [])].sort((a, b) => a.hour.localeCompare(b.hour))
+                        if (hours.length < 2) return null
+                        const maxTokens = Math.max(...hours.map((h: any) => h.totalTokens), 1)
+                        const width = 760
+                        const height = 140
+                        const paddingLeft = 40
+                        const paddingTop = 10
+                        
+                        const points = hours.map((h: any, i: number) => {
+                          const x = paddingLeft + (i / (hours.length - 1)) * width
+                          const y = paddingTop + height - (h.totalTokens / maxTokens) * height
+                          return `${x},${y}`
+                        })
+                        
+                        const pathD = `M ${points.join(' L ')}`
+                        const areaD = `M ${paddingLeft},${paddingTop + height} L ${points.join(' L ')} L ${paddingLeft + width},${paddingTop + height} Z`
+                        
+                        return (
+                          <g>
+                            <defs>
+                              <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#8B5CF6" stopOpacity="0.4" />
+                                <stop offset="100%" stopColor="#8B5CF6" stopOpacity="0.05" />
+                              </linearGradient>
+                            </defs>
+                            <path d={areaD} fill="url(#areaGradient)" />
+                            <path d={pathD} fill="none" stroke="#8B5CF6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            {hours.length <= 24 && hours.map((h: any, i: number) => {
+                              const x = paddingLeft + (i / (hours.length - 1)) * width
+                              const y = paddingTop + height - (h.totalTokens / maxTokens) * height
+                              return (
+                                <circle key={i} cx={x} cy={y} r="3" fill="#8B5CF6" className="hover:r-4 transition-all">
+                                  <title>{h.hour}: {h.totalTokens.toLocaleString()} tokens</title>
+                                </circle>
+                              )
+                            })}
+                          </g>
+                        )
+                      })()}
+                      {(() => {
+                        const hours = [...(usageData?.hourly || [])].sort((a, b) => a.hour.localeCompare(b.hour))
+                        if (hours.length < 2) return null
+                        const labelCount = Math.min(8, hours.length)
+                        const step = Math.floor(hours.length / labelCount)
+                        return hours.filter((_: any, i: number) => i % step === 0 || i === hours.length - 1).map((h: any, idx: number, arr: any[]) => {
+                          const originalIndex = hours.indexOf(h)
+                          const x = 40 + (originalIndex / (hours.length - 1)) * 760
+                          const label = h.hour.slice(11, 16)
+                          return (
+                            <text key={idx} x={x} y="158" fill="#6B7280" fontSize="9" textAnchor="middle">
+                              {label}
+                            </text>
+                          )
+                        })
+                      })()}
+                    </svg>
+                  </div>
+                ) : (
+                  <p className="text-gray-500 text-sm text-center py-8">暂无足够数据绘制图表</p>
+                )}
+              </div>
+
+              {/* Daily Usage */}
+              <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                <h3 className="text-white font-semibold mb-4">每日用量趋势</h3>
+                <div className="space-y-2">
+                  {(usageData?.daily || []).slice(0, 10).map((day: any) => (
+                    <div key={day.date} className="flex items-center gap-4">
+                      <span className="text-gray-500 text-sm w-24">{day.date}</span>
+                      <div className="flex-1 h-6 bg-gray-800 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-purple-500 to-pink-400 rounded-full"
+                          style={{ width: `${usageData?.daily[0]?.totalTokens ? Math.min(100, (day.totalTokens / usageData.daily[0].totalTokens) * 100) : 0}%` }}
+                        />
+                      </div>
+                      <span className="text-gray-400 text-sm w-32 text-right">{day.totalTokens.toLocaleString()} tokens</span>
+                      <span className="text-gray-500 text-sm w-20 text-right">${day.cost.toFixed(4)}</span>
+                    </div>
+                  ))}
+                  {(!usageData?.daily || usageData.daily.length === 0) && (
+                    <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Monthly Usage */}
+              <div className="mt-6 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                <h3 className="text-white font-semibold mb-4">每月用量汇总</h3>
+                {(usageData?.monthly && usageData.monthly.length > 0) ? (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                      {usageData.monthly.slice(0, 3).map((m: any) => (
+                        <div key={m.month} className="bg-gray-800/50 rounded-lg p-4">
+                          <div className="text-gray-400 text-sm mb-1">{m.month}</div>
+                          <div className="text-2xl font-bold text-white mb-1">{m.totalTokens.toLocaleString()}</div>
+                          <div className="text-gray-500 text-sm">tokens · ${m.cost.toFixed(2)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="space-y-2">
+                      {usageData.monthly.map((m: any) => (
+                        <div key={m.month} className="flex items-center gap-4">
+                          <span className="text-gray-500 text-sm w-20">{m.month}</span>
+                          <div className="flex-1 h-6 bg-gray-800 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-gradient-to-r from-green-500 to-cyan-400 rounded-full"
+                              style={{ width: `${usageData.monthly[0]?.totalTokens ? Math.min(100, (m.totalTokens / usageData.monthly[0].totalTokens) * 100) : 0}%` }}
+                            />
+                          </div>
+                          <span className="text-gray-400 text-sm w-36 text-right">{m.totalTokens.toLocaleString()} tokens</span>
+                          <span className="text-gray-500 text-sm w-24 text-right">${m.cost.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-gray-500 text-sm text-center py-4">暂无数据</p>
+                )}
+              </div>
             </div>
           )}
 
@@ -3328,34 +3602,49 @@ ${agentsForm.tools || '无'}`
 
                   {/* Dream List */}
                   <div className="space-y-3 max-w-3xl">
-                    {dreams.filter(d => 
-                      (dreamAgentFilter === 'all' || d.agentId === dreamAgentFilter) &&
-                      (dreamPhaseFilter === 'all' || d.phase === dreamPhaseFilter)
-                    ).map(dream => {
-                      const date = dream.timestamp.split('T')[0]
-                      const time = dream.timestamp.split('T')[1]?.substring(0, 5) || ''
-                      return (
-                        <div key={dream.id} className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 cursor-pointer hover:border-gray-700" onClick={() => setSelectedDream(dream)}>
-                          <div className="flex flex-wrap items-center gap-2 mb-2">
-                            <span className="text-lg">{dream.agentEmoji}</span>
-                            <span className="text-sm font-medium text-white">{dream.agentName}</span>
-                            <span className="text-gray-600">·</span>
-                            <span className="text-sm text-gray-400">{date}</span>
-                            <span className="text-gray-600">·</span>
-                            <span className="text-sm text-gray-500">{time}</span>
-                            <span className={`px-2 py-0.5 text-xs rounded ${dream.phase === 'rem' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'}`}>
-                              {dream.phase === 'rem' ? 'REM' : '浅睡'}
-                            </span>
-                            <span className="px-2 py-0.5 text-xs bg-gray-800 text-gray-400 rounded">{dream.lineCount}行</span>
+                    {(() => {
+                      // Group dreams by agent
+                      const agentGroups: Record<string, DreamEntry[]> = {}
+                      for (const dream of dreams) {
+                        if (!agentGroups[dream.agentId]) agentGroups[dream.agentId] = []
+                        agentGroups[dream.agentId].push(dream)
+                      }
+                      
+                      const result: DreamEntry[] = []
+                      for (const agentId of Object.keys(agentGroups)) {
+                        if (dreamAgentFilter !== 'all' && agentId !== dreamAgentFilter) continue
+                        const filtered = agentGroups[agentId]
+                          .filter(d => dreamPhaseFilter === 'all' || d.phase === dreamPhaseFilter)
+                          .slice(0, 20) // Max 20 per agent
+                        result.push(...filtered)
+                      }
+                      
+                      return result.map(dream => {
+                        const date = dream.timestamp.split('T')[0]
+                        const time = dream.timestamp.split('T')[1]?.substring(0, 5) || ''
+                        return (
+                          <div key={dream.id} className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 cursor-pointer hover:border-gray-700" onClick={() => setSelectedDream(dream)}>
+                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                              <span className="text-lg">{dream.agentEmoji}</span>
+                              <span className="text-sm font-medium text-white">{dream.agentName}</span>
+                              <span className="text-gray-600">·</span>
+                              <span className="text-sm text-gray-400">{date}</span>
+                              <span className="text-gray-600">·</span>
+                              <span className="text-sm text-gray-500">{time}</span>
+                              <span className={`px-2 py-0.5 text-xs rounded ${dream.phase === 'rem' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                                {dream.phase === 'rem' ? 'REM' : '浅睡'}
+                              </span>
+                              <span className="px-2 py-0.5 text-xs bg-gray-800 text-gray-400 rounded">{dream.lineCount}行</span>
+                            </div>
+                            <p className="text-xs text-gray-500 mb-2 truncate">{dream.preview}</p>
+                            <div className="flex gap-4 text-xs text-gray-600">
+                              <span>Light: {dream.lightHits || 0}</span>
+                              <span>REM: {dream.remHits || 0}</span>
+                            </div>
                           </div>
-                          <p className="text-xs text-gray-500 mb-2 truncate">{dream.preview}</p>
-                          <div className="flex gap-4 text-xs text-gray-600">
-                            <span>Light: {dream.lightHits || 0}</span>
-                            <span>REM: {dream.remHits || 0}</span>
-                          </div>
-                        </div>
-                      )
-                    })}
+                        )
+                      })
+                    })()}
                   </div>
                 </div>
               )}

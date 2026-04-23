@@ -247,6 +247,10 @@ function getAgentIds(): string[] {
   }
 }
 
+// In-memory cache for usage data
+let usageCache: { data: any; timestamp: number } | null = null
+const CACHE_TTL_MS = 30 * 1000 // 30 seconds cache
+
 // GET /api/usage
 export async function GET(request: NextRequest) {
   // Auth check
@@ -261,9 +265,23 @@ export async function GET(request: NextRequest) {
   const searchParams = new URL(request.url).searchParams
   const forceRefresh = searchParams.get('refresh') === 'true'
   
-  // Always read from files to get latest usage data (cache is unreliable)
-  // 修复：每次都读取最新文件，避免缓存过期导致数据不更新
-  // 同时更新数据库缓存供其他快速读取场景使用
+  // Try reading from DB cache first (fast path, ~0ms)
+  if (!forceRefresh && usageCache && (Date.now() - usageCache.timestamp) < CACHE_TTL_MS) {
+    return NextResponse.json(usageCache.data)
+  }
+  
+  // Try reading from database (medium path, ~10-50ms)
+  if (!forceRefresh) {
+    const dbData = readUsageFromDB()
+    if (dbData) {
+      // Update cache
+      usageCache = { data: dbData, timestamp: Date.now() }
+      return NextResponse.json(dbData)
+    }
+  }
+  
+  // Fall back to reading files (slow path, ~1000ms+)
+  // This also updates the DB cache for next time
   
   const agentNames = getAgentNames()
   const agentIds = getAgentIds()
@@ -305,7 +323,7 @@ export async function GET(request: NextRequest) {
     
     try {
       const files = readdirSync(sessionsPath)
-      const jsonlFiles = files.filter(f => f.includes('.jsonl'))
+      const jsonlFiles = files.filter(f => f.endsWith('.jsonl') && !f.includes('.checkpoint.'))
       
       for (const file of jsonlFiles) {
         const filePath = join(sessionsPath, file)
@@ -432,13 +450,16 @@ export async function GET(request: NextRequest) {
                   if (!hourlyUsageMap[hour]) {
                     hourlyUsageMap[hour] = {
                       hour,
+                      agentId,
+                      agentName: agentNames[agentId] || agentId,
                       inputTokens: 0,
                       outputTokens: 0,
                       cacheRead: 0,
                       cacheWrite: 0,
                       totalTokens: 0,
                       cost: 0,
-                      sessionCount: 0
+                      sessionCount: 0,
+                      models: {}
                     }
                   }
                   const hourlyUsage = hourlyUsageMap[hour]
@@ -448,6 +469,19 @@ export async function GET(request: NextRequest) {
                   hourlyUsage.cacheWrite += cacheWrite
                   hourlyUsage.totalTokens += totalTokens
                   hourlyUsage.cost += cost
+                  
+                  // Update hourly model breakdown
+                  const hourModelKey = provider + ':' + model
+                  if (!hourlyUsage.models[hourModelKey]) {
+                    hourlyUsage.models[hourModelKey] = { model, provider, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 }
+                  }
+                  const hm = hourlyUsage.models[hourModelKey]
+                  hm.inputTokens += inputTokens
+                  hm.outputTokens += outputTokens
+                  hm.cacheRead += cacheRead
+                  hm.cacheWrite += cacheWrite
+                  hm.totalTokens += totalTokens
+                  hm.cost += cost
                   
                   // Update monthly
                   if (!monthlyUsageMap[month]) {
@@ -565,70 +599,83 @@ export async function GET(request: NextRequest) {
     monthly
   }
   
+  // Get existing records to preserve old data
+  const existingRecords = new Set<string>()
+  try {
+    const existing = db.prepare('SELECT stat_hour, agent_id, model, provider FROM usage_stats').all() as any[]
+    for (const r of existing) {
+      existingRecords.add(`${r.stat_hour}:${r.agent_id}:${r.model}:${r.provider}`)
+    }
+  } catch {}
+
   // Save to database cache for other fast-read scenarios
   try {
-    const upsert = db.prepare(`
+    const insert = db.prepare(`
       INSERT INTO usage_stats (stat_date, stat_hour, agent_id, agent_name, model, provider, 
         input_tokens, output_tokens, cache_read, cache_write, total_tokens, cost, session_count, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT(stat_date, stat_hour, agent_id, model, provider) 
-      DO UPDATE SET
-        agent_name = excluded.agent_name,
-        input_tokens = excluded.input_tokens,
-        output_tokens = excluded.output_tokens,
-        cache_read = excluded.cache_read,
-        cache_write = excluded.cache_write,
-        total_tokens = excluded.total_tokens,
-        cost = excluded.cost,
-        session_count = excluded.session_count,
-        updated_at = CURRENT_TIMESTAMP
     `)
-    
+
     const agentNames = getAgentNames()
+
+    // Save all NEW hourly stats to DB (skip existing)
     const insertMany = db.transaction((items: any[]) => {
       for (const item of items) {
-        // Daily stats
-        if (item.date) {
-          upsert.run(item.date, item.date + ' 00:00', item.agentId || 'unknown', 
-            agentNames[item.agentId] || item.agentId || 'unknown', 
-            item.model || 'unknown', item.provider || 'unknown',
-            item.inputTokens, item.outputTokens, item.cacheRead, item.cacheWrite,
-            item.totalTokens, item.cost, item.sessionCount || 0)
-        }
-        // Hourly stats
         if (item.hour) {
-          upsert.run(item.hour.slice(0, 10), item.hour, item.agentId || 'unknown',
+          insert.run(
+            item.hour.slice(0, 10),
+            item.hour,
+            item.agentId || 'unknown',
             agentNames[item.agentId] || item.agentId || 'unknown',
-            item.model || 'unknown', item.provider || 'unknown',
-            item.inputTokens, item.outputTokens, item.cacheRead, item.cacheWrite,
-            item.totalTokens, item.cost, item.sessionCount || 0)
+            item.model || 'unknown',
+            item.provider || 'unknown',
+            item.inputTokens,
+            item.outputTokens,
+            item.cacheRead,
+            item.cacheWrite,
+            item.totalTokens,
+            item.cost,
+            item.sessionCount || 0
+          )
         }
       }
     })
-    
-    // Insert all agent-model combinations
-    for (const agent of agents) {
-      for (const model of (agent.models || [])) {
-        upsert.run(
-          new Date().toISOString().slice(0, 10), 
-          new Date().toISOString().slice(0, 10) + ' 00:00',
-          agent.agentId, 
-          agent.agentName,
-          model.model,
-          model.provider,
-          model.inputTokens,
-          model.outputTokens,
-          model.cacheRead,
-          model.cacheWrite,
-          model.totalTokens,
-          model.cost,
-          model.sessionCount || 0
-        )
+
+    const allItems: any[] = []
+    for (const hour of Object.keys(hourlyUsageMap)) {
+      const data = hourlyUsageMap[hour]
+      for (const modelKey of Object.keys(data.models)) {
+        const m = data.models[modelKey]
+        const key = `${data.hour}:${data.agentId}:${m.model}:${m.provider}`
+        // Only add if not exists
+        if (!existingRecords.has(key)) {
+          allItems.push({
+            hour: data.hour,
+            agentId: data.agentId,
+            agentName: data.agentName,
+            model: m.model,
+            provider: m.provider,
+            inputTokens: m.inputTokens,
+            outputTokens: m.outputTokens,
+            cacheRead: m.cacheRead,
+            cacheWrite: m.cacheWrite,
+            totalTokens: m.totalTokens,
+            cost: m.cost,
+            sessionCount: m.sessionCount
+          })
+        }
       }
+    }
+
+    if (allItems.length > 0) {
+      insertMany(allItems)
     }
   } catch (e) {
     console.error('Failed to save usage to cache:', e)
   }
+  
+  // Update cache before returning
+  usageCache = { data: result, timestamp: Date.now() }
   
   return NextResponse.json(result)
 }

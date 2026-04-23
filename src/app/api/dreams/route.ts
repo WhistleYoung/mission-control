@@ -6,6 +6,11 @@ import { db } from '@/lib/db'
 import type { NextRequest } from 'next/server'
 import { getOpenClawConfig, getAgentWorkspace } from '@/lib/paths'
 
+// Simple in-memory cache
+let cache: { data: any[] | null; timestamp: number } = { data: null, timestamp: 0 }
+const CACHE_TTL_MS = 30000 // 30 seconds
+const DEFAULT_LIMIT = 5000 // Default limit for initial load
+
 interface DreamEntry {
   id: string
   agentId: string
@@ -81,9 +86,11 @@ function readDreamsFromWorkspace(workspacePath: string, agentId: string, agentNa
         if (event.type === 'memory.dream.completed') {
           const dateMatch = event.inlinePath?.match(/(\d{4}-\d{2}-\d{2})\.md$/)
           const date = dateMatch ? dateMatch[1] : ''
+          // Use timestamp to make id unique (same agent+date+phase can have many dreams)
+          const ts = event.timestamp ? event.timestamp.replace(/[^0-9]/g, '').slice(0, 14) : Date.now().toString()
           
           dreams.push({
-            id: `${agentId}-${date}-${event.phase}`,
+            id: `${agentId}-${date}-${event.phase}-${ts}`,
             agentId,
             agentName,
             agentEmoji,
@@ -107,7 +114,26 @@ function readDreamsFromWorkspace(workspacePath: string, agentId: string, agentNa
   return dreams
 }
 
-// Save dreams to database (backup mode)
+// Read dreams from database cache (fast path)
+function readDreamsFromDb(limit: number = DEFAULT_LIMIT): DreamEntry[] {
+  try {
+    const rows = db.prepare(`
+      SELECT id, agent_id as agentId, agent_name as agentName, agent_emoji as agentEmoji,
+        timestamp, phase, inline_path as inlinePath, line_count as lineCount, 
+        storage_mode as storageMode, light_hits as lightHits, rem_hits as remHits, 
+        last_light_at as lastLightAt, preview
+      FROM dreams_cache
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `).all(limit) as DreamEntry[]
+    return rows
+  } catch (e) {
+    console.error('Error reading dreams from db:', e)
+    return []
+  }
+}
+
+// Save dreams to database
 function saveDreamsToDb(dreams: DreamEntry[]) {
   ensureDreamsTable()
   
@@ -116,7 +142,6 @@ function saveDreamsToDb(dreams: DreamEntry[]) {
       INSERT OR REPLACE INTO dreams_cache (id, agent_id, agent_name, agent_emoji, timestamp, phase, inline_path, line_count, storage_mode, light_hits, rem_hits, last_light_at, preview, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `)
-
     for (const d of dreams) {
       insert.run(d.id, d.agentId, d.agentName, d.agentEmoji, d.timestamp, d.phase, d.inlinePath, d.lineCount, d.storageMode, d.lightHits, d.remHits, d.lastLightAt, d.preview)
     }
@@ -125,12 +150,52 @@ function saveDreamsToDb(dreams: DreamEntry[]) {
   }
 }
 
-// GET /api/dreams - Read from files (always up-to-date) + save to cache
+// GET /api/dreams - Read from DB cache first, fallback to files + background sync
 export async function GET(request: NextRequest) {
   const auth = verifyAuth(request)
   const errorResponse = createAuthResponse(auth.authorized, '请先登录')
   if (errorResponse) return errorResponse
 
+  const searchParams = new URL(request.url).searchParams
+  const limit = parseInt(searchParams.get('limit') || String(DEFAULT_LIMIT)) || DEFAULT_LIMIT
+  const sync = searchParams.get('sync') === 'true'
+  
+  const now = Date.now()
+  
+  // Check in-memory cache first (30s TTL)
+  if (!sync && cache.data && (now - cache.timestamp) < CACHE_TTL_MS) {
+    return NextResponse.json(cache.data.slice(0, limit))
+  }
+  
+  // Try reading from database first (fast path)
+  if (!sync) {
+    const dbDreams = readDreamsFromDb(limit)
+    if (dbDreams.length > 0) {
+      // Update in-memory cache
+      cache = { data: dbDreams, timestamp: now }
+      
+      // Trigger background sync (fire and forget)
+      ;(async () => {
+        try {
+          const agents = getAgents()
+          const allDreams: DreamEntry[] = []
+          for (const agent of agents) {
+            const workspace = getAgentWorkspace(agent.id)
+            const dreams = readDreamsFromWorkspace(workspace, agent.id, agent.name, agent.emoji)
+            allDreams.push(...dreams)
+          }
+          allDreams.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+          saveDreamsToDb(allDreams)
+        } catch (e) {
+          console.error('Background sync failed:', e)
+        }
+      })()
+      
+      return NextResponse.json(dbDreams)
+    }
+  }
+  
+  // Fallback: read from files (slow path)
   try {
     const agents = getAgents()
     const allDreams: DreamEntry[] = []
@@ -144,12 +209,14 @@ export async function GET(request: NextRequest) {
     // Sort by timestamp descending
     allDreams.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
 
-    // Also save to cache for backup
-    if (allDreams.length > 0) {
-      saveDreamsToDb(allDreams)
-    }
+    // Update cache with full data
+    cache = { data: allDreams, timestamp: now }
+    
+    // Save to database for future fast reads
+    saveDreamsToDb(allDreams)
 
-    return NextResponse.json(allDreams)
+    // Return limited results
+    return NextResponse.json(allDreams.slice(0, limit))
   } catch (error) {
     console.error('Failed to fetch dreams:', error)
     return NextResponse.json({ error: 'Failed to fetch dreams' }, { status: 500 })
