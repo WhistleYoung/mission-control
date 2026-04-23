@@ -2,9 +2,9 @@
  * Shared utility for loading agent names from openclaw.json config
  * This ensures all API routes use the same source of truth for agent names
  */
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, readdirSync } from 'fs'
 import { join } from 'path'
-import { OPENCLAW_CONFIG } from './paths'
+import { OPENCLAW_CONFIG, AGENTS_DIR } from './paths'
 
 interface AgentInfo {
   id: string
@@ -23,6 +23,9 @@ const CHINESE_ALIASES: Record<string, string> = {
   codrever: '代码稽核',
   writer: '写作小能手',
   shenhe: '版权稽核',
+  shipinyun: '视频云开发',
+  shipysw: '视频云算法',
+  huibao: '汇报机器人',
 }
 
 export function getAgentNames(): Record<string, string> {
@@ -62,27 +65,54 @@ export function getAgentsList(): AgentInfo[] {
     return agentCache
   }
 
+  const result: AgentInfo[] = []
+  const seenIds = new Set<string>()
+
+  // 1. First, get agents from openclaw.json (has higher priority for name/emoji)
   try {
     const configPath = OPENCLAW_CONFIG
-    if (!existsSync(configPath)) {
-      return getDefaultAgents()
+    if (existsSync(configPath)) {
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'))
+      const agentsList = config.agents?.list || []
+      for (const agent of agentsList) {
+        if (!seenIds.has(agent.id)) {
+          result.push({
+            id: agent.id,
+            name: agent.name || CHINESE_ALIASES[agent.id] || agent.id,
+            emoji: agent.emoji || undefined,
+          })
+          seenIds.add(agent.id)
+        }
+      }
     }
-
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'))
-    const agentsList = config.agents?.list || []
-    
-    agentCache = agentsList.map((agent: any) => ({
-      id: agent.id,
-      name: agent.name || agent.id,
-      emoji: agent.emoji || undefined,
-    }))
-    cacheTimestamp = Date.now()
-    
-    return agentCache!
   } catch (error) {
-    console.error('Failed to load agent config:', error)
-    return getDefaultAgents()
+    console.error('Failed to load agents from config:', error)
   }
+
+  // 2. Also scan AGENTS_DIR for directories with sessions (discover agents not in config)
+  try {
+    if (existsSync(AGENTS_DIR)) {
+      const dirs = readdirSync(AGENTS_DIR)
+      for (const dir of dirs) {
+        if (!seenIds.has(dir)) {
+          const sessionsPath = join(AGENTS_DIR, dir, 'sessions')
+          // Only add if sessions directory exists
+          if (existsSync(sessionsPath)) {
+            result.push({
+              id: dir,
+              name: CHINESE_ALIASES[dir] || dir,
+              emoji: undefined,
+            })
+            seenIds.add(dir)
+          }
+        }
+      }
+    }
+  } catch {}
+
+  cacheTimestamp = Date.now()
+  agentCache = result
+  return result
 }
 
 function getDefaultAgents(): AgentInfo[] {

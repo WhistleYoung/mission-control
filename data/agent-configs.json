@@ -1,7 +1,9 @@
 {
-  "worker": "cli-proxy/MiniMax-M2.5",
+  "worker": "minimax/MiniMax-M2.7",
   "main": "minimax/MiniMax-M2.7",
-  "devper": "cli-proxy/MiniMax-M2.5",
+  "devper": "minimax/MiniMax-M2.7",
   "codrever": "cli-proxy/gemini-2.5-pro",
-  "shipinyun": "minimax/MiniMax-M2.7"
+  "shipinyun": "minimax/MiniMax-M2.7",
+  "shipysf": "minimax/MiniMax-M2.7",
+  "shipysw": "minimax/MiniMax-M2.7"
 }
