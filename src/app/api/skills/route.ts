@@ -195,12 +195,13 @@ function getClawhubToken(): string | undefined {
 // Search clawhub for skills
 function searchClawhub(query: string, apiToken?: string): any[] {
   try {
-    let cmd = `clawhub search "${query}"`
+    // Use npx to ensure clawhub is found on all platforms
+    let cmd = `npx clawhub search "${query}"`
     const token = apiToken || getClawhubToken()
     if (token) {
-      cmd = `CLAWHUB_TOKEN=${token} ${cmd}`
+      cmd = `set CLAWHUB_TOKEN=${token} && ${cmd}`
     }
-    const output = execSync(cmd, { timeout: 30000 })
+    const output = execSync(cmd, { timeout: 30000, shell: 'cmd.exe' })
     const text = output.toString()
 
     const lines = text.split('\n').filter((l: string) => l.trim())
