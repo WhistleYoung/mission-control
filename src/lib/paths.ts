@@ -79,12 +79,12 @@ export function getExecApprovals(): string {
 }
 
 // Backward compatibility - deprecated, use functions above
-export const OPENCLAW_CONFIG = path.join(DEFAULT_OPENCLAW_DIR, 'openclaw.json');
-export const AGENTS_DIR = path.join(DEFAULT_OPENCLAW_DIR, 'agents');
-export const WORKSPACE = path.join(DEFAULT_OPENCLAW_DIR, 'workspace');
-export const WORKSPACE_PREFIX = path.join(DEFAULT_OPENCLAW_DIR, 'workspace-');
-export const PLUGIN_APPROVALS = path.join(DEFAULT_OPENCLAW_DIR, 'plugin-approvals.json');
-export const EXEC_APPROVALS = path.join(DEFAULT_OPENCLAW_DIR, 'exec-approvals.json');
+export const OPENCLAW_CONFIG = path.join(getOpenClawDir(), 'openclaw.json');
+export const AGENTS_DIR = path.join(getOpenClawDir(), 'agents');
+export const WORKSPACE = path.join(getOpenClawDir(), 'workspace');
+export const WORKSPACE_PREFIX = path.join(getOpenClawDir(), 'workspace-');
+export const PLUGIN_APPROVALS = path.join(getOpenClawDir(), 'plugin-approvals.json');
+export const EXEC_APPROVALS = path.join(getOpenClawDir(), 'exec-approvals.json');
 export const TEMPLATE_WORKSPACE = WORKSPACE;
 
 // Helper to get workspace for an agent
