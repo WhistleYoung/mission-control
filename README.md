@@ -105,6 +105,48 @@ npm run build
 npm start
 ```
 
+### Windows 部署
+
+1. **安装 Node.js**
+   - 下载并安装 [Node.js 18+](https://nodejs.org/)（LTS 版本）
+   - 建议使用 nvm-windows：https://github.com/coreybutler/nvm-windows
+
+2. **安装 better-sqlite3 编译工具**（Windows 需要）
+   ```powershell
+   # 以管理员身份运行 PowerShell
+   npm install -g windows-build-tools
+   ```
+
+3. **克隆并构建**
+   ```powershell
+   # 克隆项目
+git clone https://github.com/WhistleYoung/mission-control.git
+cd mission-control
+
+# 安装依赖
+npm install
+
+# 构建（如遇 better-sqlite3 编译错误，先运行）
+npm install --build-from-source
+
+# 构建生产版本
+npm run build
+
+# 启动
+npm start
+   ```
+
+4. **配置 OpenClaw 路径**（如 OpenClaw 安装在其他位置）
+   - 首次登录后，在设置页面配置 OpenClaw 安装路径
+
+5. **后台运行**（可选，使用 PM2）
+   ```powershell
+   npm install -g pm2
+   pm2 start npm --name "openclaw-panel" -- start
+   pm2 save
+   pm2 startup
+   ```
+
 默认账号：`admin` / `admin123`
 
 ## 项目结构
