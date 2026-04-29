@@ -10,8 +10,9 @@ import {
   Key, FolderTree, Grid, Cpu, Edit2, Shield, ShieldCheck, ShieldX, List,
   TrendingUp,
 } from 'lucide-react'
+import { WorkStatusScene } from '@/components/ui/PixelWorker'
 
-type Tab = 'inbox' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'timing' | 'realtime' | 'logs' | 'models' | 'usage'
+type Tab = 'inbox' | 'projects' | 'memory' | 'agents' | 'skills' | 'settings' | 'channels' | 'workstatus' | 'timing' | 'realtime' | 'logs' | 'models' | 'usage'
 type TaskStatus = 'backlog' | 'todo' | 'in-progress' | 'in-review' | 'done'
 type Priority = 'urgent' | 'high' | 'medium' | 'low'
 type MemoryFilter = 'daily' | 'long-term' | 'all'
@@ -2002,6 +2003,10 @@ export default function MissionControl() {
   // Tab data fetching configuration - single source of truth for all tab data loading
   // Add new tabs here to enable lazy loading
   const TAB_DATA_CONFIG: Record<string, () => void> = {
+    workstatus: () => {
+      // 实时任务状态 - 每5秒刷新
+      fastFetch('/api/realtime-tasks').then(data => { if (data?.tasks) setRealtimeTasks(data.tasks) })
+    },
     realtime: () => {
       fastFetch('/api/realtime-tasks').then(data => { if (data?.tasks) setRealtimeTasks(data.tasks) })
       fastFetch('/api/sessions').then(data => { if (Array.isArray(data)) setRealtimeSessions(data) })
@@ -2020,9 +2025,11 @@ export default function MissionControl() {
     channels: () => {
       fastFetch('/api/channels').then(data => { if (Array.isArray(data)) setChannels(data) })
     },
-    usage: () => {
-      // API will return from cache immediately and trigger background sync
-      fastFetch('/api/usage').then(data => { if (data?.total !== undefined) setUsageData(data) })
+    usage: async () => {
+      // First sync from session files to DB, then read from DB
+      await fetch('/api/usage', { method: 'POST' })
+      const data = await fastFetch('/api/usage')
+      if (data?.total !== undefined) setUsageData(data)
     },
   }
 
@@ -2030,6 +2037,19 @@ export default function MissionControl() {
   useEffect(() => {
     const fetcher = TAB_DATA_CONFIG[activeTab]
     if (fetcher) fetcher()
+  }, [activeTab])
+
+  // 工作状态Tab专用轮询 - 每5秒刷新任务状态
+  useEffect(() => {
+    if (activeTab !== 'workstatus') return
+    
+    const interval = setInterval(() => {
+      fastFetch('/api/realtime-tasks').then(data => { 
+        if (data?.tasks) setRealtimeTasks(data.tasks) 
+      })
+    }, 5000)
+    
+    return () => clearInterval(interval)
   }, [activeTab])
 
   // Core data: fetch on mount for fast initial page render
@@ -2661,6 +2681,7 @@ ${agentsForm.tools || '无'}`
                 { id: 'skills', label: '技能', icon: Sparkles },
                 { id: 'memory', label: '记忆', icon: Brain },
                 { id: 'channels', label: '渠道', icon: Network },
+                { id: 'workstatus', label: '工作状态', icon: Activity },
                 { id: 'timing', label: '定时任务', icon: Clock },
                 { id: 'realtime', label: '实时会话', icon: Zap },
                 { id: 'logs', label: '工具日志', icon: FileText },
@@ -2709,6 +2730,7 @@ ${agentsForm.tools || '无'}`
             { id: 'skills', label: '技能', icon: Sparkles },
             { id: 'memory', label: '记忆', icon: Brain },
             { id: 'channels', label: '渠道', icon: Network },
+            { id: 'workstatus', label: '工作状态', icon: Activity },
             { id: 'timing', label: '定时任务', icon: Clock },
             { id: 'realtime', label: '实时会话', icon: Zap },
             { id: 'logs', label: '工具日志', icon: FileText },
@@ -2750,6 +2772,7 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'skills' && '技能'}
               {activeTab === 'memory' && '记忆'}
               {activeTab === 'channels' && '渠道'}
+              {activeTab === 'workstatus' && '工作状态'}
               {activeTab === 'timing' && '定时任务'}
               {activeTab === 'realtime' && '实时会话'}
               {activeTab === 'logs' && '工具日志'}
@@ -2793,6 +2816,7 @@ ${agentsForm.tools || '无'}`
               {activeTab === 'skills' && '技能'}
               {activeTab === 'memory' && '记忆'}
               {activeTab === 'channels' && '渠道'}
+              {activeTab === 'workstatus' && '工作状态'}
               {activeTab === 'timing' && '定时任务'}
               {activeTab === 'realtime' && '实时会话'}
               {activeTab === 'models' && '模型'}
@@ -3929,6 +3953,58 @@ ${agentsForm.tools || '无'}`
             </div>
           )}
 
+          {/* Work Status Tab - Pixel Workers */}
+          {activeTab === 'workstatus' && (
+            <div className="p-4 md:p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-medium text-white">工作状态</h2>
+                <button 
+                  onClick={async () => {
+                    try {
+                      const res = await fetch('/api/realtime-tasks')
+                      const data = await res.json()
+                      if (data?.tasks) setRealtimeTasks(data.tasks)
+                    } catch (e) { console.log('Failed to refresh', e) }
+                  }}
+                  className="linear-btn-secondary flex items-center gap-1"
+                >
+                  <RefreshCw className="w-4 h-4" />刷新
+                </button>
+              </div>
+              <WorkStatusScene 
+                agents={agents
+                  .map(agent => {
+                    const runningTask = realtimeTasks.find(t => t.agentId === agent.id && t.status === 'running')
+                    const errorTask = realtimeTasks.find(t => t.agentId === agent.id && t.status === 'error')
+                    return {
+                      agentId: agent.id,
+                      agentName: agent.identityName,
+                      agentEmoji: agent.identityEmoji,
+                      status: (errorTask ? 'error' : runningTask ? 'working' : 'idle') as 'idle' | 'working' | 'error',
+                      taskName: runningTask?.task,
+                      taskStartTime: runningTask?.startedAt || null,
+                      subagentCount: runningTask?.childSessions?.length || 0,
+                    }
+                  })
+                  .sort((a, b) => {
+                    if (a.status === 'working' && b.status !== 'working') return -1
+                    if (b.status === 'working' && a.status !== 'working') return 1
+                    if (a.status === 'error' && b.status !== 'error') return -1
+                    if (b.status === 'error' && a.status !== 'error') return 1
+                    return 0
+                  })
+                } 
+              />
+              {agents.length === 0 && (
+                <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-8 text-center">
+                  <Activity className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+                  <h3 className="text-white font-medium mb-2">暂无员工</h3>
+                  <p className="text-sm text-gray-500">请先创建员工</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Timing / Cron Jobs */}
           {activeTab === 'timing' && (
             <div className="p-4 md:p-6">
@@ -3984,165 +4060,18 @@ ${agentsForm.tools || '无'}`
           {/* Realtime Sessions Tab */}
           {activeTab === 'realtime' && (
             <div className="p-4 md:p-6">
-              {/* 左右布局：后台运行任务 | 实时会话 */}
-              <div className="flex flex-col md:flex-row gap-4 md:gap-6 md:h-[calc(100vh-12rem)]">
-                {/* 左侧：后台运行任务 */}
-                <div className="w-full md:w-80 flex-shrink-0 flex flex-col max-h-[40vh] md:max-h-full overflow-hidden">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <Activity className="w-4 h-4 text-green-400" />
-                      <h3 className="text-sm font-medium text-white">后台运行任务</h3>
-                      <span className="px-1.5 py-0.5 text-xs bg-green-500/20 text-green-400 rounded">
-                        {realtimeTasks.filter(t => t.status === 'running').length} 运行
-                      </span>
-                    </div>
-                    <button 
-                      onClick={async () => {
-                        try {
-                          const res = await fetch('/api/realtime-tasks')
-                          const data = await res.json()
-                          if (data?.tasks) setRealtimeTasks(data.tasks)
-                        } catch (e) { console.log('Failed to refresh tasks', e) }
-                      }}
-                      className="p-1.5 hover:bg-gray-700 rounded text-gray-400 hover:text-white"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="flex-1 overflow-y-auto space-y-2">
-                    {realtimeTasks.length === 0 ? (
-                      <div className="bg-gray-900/30 rounded-lg border border-gray-800 p-4 text-center">
-                        <p className="text-sm text-gray-500">暂无后台运行任务</p>
-                      </div>
-                    ) : (
-                      realtimeTasks.map((task, i) => {
-                        const agent = agents.find(a => a.id === task.agentId)
-                        return (
-                          <div 
-                            key={i}
-                            className={`bg-gray-900/50 rounded-lg border p-3 ${
-                              task.status === 'running' 
-                                ? 'border-green-500/50 hover:border-green-500/80' 
-                                : task.status === 'error'
-                                ? 'border-red-500/50 hover:border-red-500/80'
-                                : 'border-gray-700'
-                            } cursor-pointer transition-colors group`}
-                            onClick={() => {
-                              if (task.sessionId) {
-                                const session = realtimeSessions.find(s => s.id === task.sessionId)
-                                if (session) handleViewSession(session)
-                              }
-                            }}
-                          >
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <div className={`w-2 h-2 rounded-full ${
-                                  task.status === 'running' ? 'bg-green-400 animate-pulse' : 
-                                  task.status === 'error' ? 'bg-red-400' : 'bg-gray-500'
-                                }`} />
-                                <div>
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="text-sm font-medium text-white">
-                                      {agent?.identityEmoji || '🤖'} {task.agentName}
-                                    </span>
-                                    {task.isSubagent && (
-                                      <span className="text-xs px-1 py-0.5 rounded bg-purple-500/20 text-purple-400">
-                                        Subagent
-                                      </span>
-                                    )}
-                                    {task.isMainAgent && (
-                                      <span className="text-xs px-1 py-0.5 rounded bg-blue-500/20 text-blue-400">
-                                        主进程
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-1.5 mt-1">
-                                    <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                      task.status === 'running' 
-                                        ? 'bg-green-500/20 text-green-400' 
-                                        : task.status === 'error'
-                                        ? 'bg-red-500/20 text-red-400'
-                                        : 'bg-gray-700 text-gray-400'
-                                    }`}>
-                                      {task.status === 'running' ? '运行中' : task.status === 'error' ? '失败' : '空闲'}
-                                    </span>
-                                    {task.model && (
-                                      <span className="text-xs text-gray-500 font-mono truncate max-w-[80px]">
-                                        {task.model.split('/').pop()}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {task.lastActive && (
-                                  <span className="text-xs text-gray-500">
-                                    {new Date(task.lastActive).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                                  </span>
-                                )}
-                                {/* 杀死按钮：只对 Subagent 和非运行中的任务显示 */}
-                                {task.isSubagent && task.status !== 'running' && (
-                                  <button
-                                    onClick={async (e) => {
-                                      e.stopPropagation()
-                                      if (!confirm(`确定要杀死 ${task.agentName} 的任务吗？`)) return
-                                      try {
-                                        const res = await fetch(`/api/realtime-tasks?sessionKey=${encodeURIComponent(task.sessionKey)}`, {
-                                          method: 'DELETE'
-                                        })
-                                        const data = await res.json()
-                                        if (data.error) {
-                                          alert(data.error)
-                                        } else {
-                                          // Refresh tasks
-                                          const tasksRes = await fetch('/api/realtime-tasks')
-                                          const tasksData = await tasksRes.json()
-                                          if (tasksData?.tasks) setRealtimeTasks(tasksData.tasks)
-                                        }
-                                      } catch (err) {
-                                        console.error('Failed to kill task:', err)
-                                        alert('终止任务失败')
-                                      }
-                                    }}
-                                    className="p-1 opacity-0 group-hover:opacity-100 hover:bg-red-500/20 rounded text-red-400 hover:text-red-300 transition-all"
-                                    title="杀死任务"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                            {task.task && task.task !== task.agentName && (
-                              <p className="text-xs text-gray-400 mt-1.5 truncate">
-                                {task.task}
-                              </p>
-                            )}
-                            {task.childSessions && task.childSessions.length > 0 && (
-                              <div className="mt-2 text-xs text-gray-500">
-                                子任务: {task.childSessions.length} 个
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })
-                    )}
-                  </div>
-                </div>
-
-                {/* 右侧：实时会话 */}
-                <div className="flex-1 flex flex-col min-w-0 mt-4 md:mt-0">
-                  <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-lg font-medium text-white">实时会话</h2>
-                    <div className="flex gap-2">
-                      <select 
-                        value={sessionFilter.agentId || ''} 
-                        onChange={e => setSessionFilter({ ...sessionFilter, agentId: e.target.value || undefined })}
-                        className="linear-input text-sm"
-                      >
-                        <option value="">全员工</option>
-                        {agents.map(a => <option key={a.id} value={a.id}>{a.identityEmoji} {a.identityName}</option>)}
-                      </select>
-                      <button onClick={async () => {
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-medium text-white">实时会话</h2>
+                <div className="flex gap-2">
+                  <select 
+                    value={sessionFilter.agentId || ''} 
+                    onChange={e => setSessionFilter({ ...sessionFilter, agentId: e.target.value || undefined })}
+                    className="linear-input text-sm"
+                  >
+                    <option value="">全员工</option>
+                    {agents.map(a => <option key={a.id} value={a.id}>{a.identityEmoji} {a.identityName}</option>)}
+                  </select>
+                  <button onClick={async () => {
                     try {
                       const params = new URLSearchParams()
                       if (sessionFilter.agentId) params.set('agentId', sessionFilter.agentId)
@@ -4153,10 +4082,6 @@ ${agentsForm.tools || '无'}`
                       } else if (data.error) {
                         console.error('Failed to fetch sessions:', data.error)
                       }
-                      // Also refresh realtime tasks
-                      const tasksRes = await fetch('/api/realtime-tasks')
-                      const tasksData = await tasksRes.json()
-                      if (tasksData?.tasks) setRealtimeTasks(tasksData.tasks)
                     } catch (error) {
                       console.error('Failed to fetch sessions:', error)
                     }
@@ -4169,7 +4094,6 @@ ${agentsForm.tools || '无'}`
                 {realtimeSessions
                   .filter(s => {
                     if (sessionFilter.agentId && s.agentId !== sessionFilter.agentId) return false
-                    // Search filter
                     if (searchQuery) {
                       const query = searchQuery.toLowerCase()
                       if (!s.title?.toLowerCase().includes(query) && 
@@ -4221,8 +4145,6 @@ ${agentsForm.tools || '无'}`
                     <p className="text-sm text-gray-500">实时会话直接从会话文件读取</p>
                   </div>
                 )}
-              </div>
-                </div>
               </div>
             </div>
           )}

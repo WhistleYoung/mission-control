@@ -83,7 +83,7 @@ function readDreamsFromWorkspace(workspacePath: string, agentId: string, agentNa
     for (const line of lines) {
       try {
         const event = JSON.parse(line)
-        if (event.type === 'memory.dream.completed') {
+        if (event.type === 'memory.dream.completed' && event.inlinePath) {
           const dateMatch = event.inlinePath?.match(/(\d{4}-\d{2}-\d{2})\.md$/)
           const date = dateMatch ? dateMatch[1] : ''
           // Use timestamp to make id unique (same agent+date+phase can have many dreams)

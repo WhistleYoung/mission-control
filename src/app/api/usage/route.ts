@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { readdirSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
-import { verifyAuth } from '@/lib/auth'
+import { verifyAuth, createAuthResponse } from '@/lib/auth'
 import { getAgentNames } from '@/lib/agent-config'
 import { db } from '@/lib/db'
 import { AGENTS_DIR, OPENCLAW_CONFIG } from '@/lib/paths'
@@ -24,218 +24,6 @@ function getAllConfiguredModels(): Array<{id: string, provider: string}> {
   }
 }
 
-// Read usage from database (fast path)
-function readUsageFromDB() {
-  try {
-    const agentNames = getAgentNames()
-    const agentIds = getAgentIds()
-    
-    // Get all configured models
-    const configuredModels = getAllConfiguredModels()
-    
-    // Get daily stats from DB
-    const dailyStats = db.prepare(`
-      SELECT stat_date as date,
-        SUM(input_tokens) as inputTokens,
-        SUM(output_tokens) as outputTokens,
-        SUM(cache_read) as cacheRead,
-        SUM(cache_write) as cacheWrite,
-        SUM(total_tokens) as totalTokens,
-        SUM(cost) as cost,
-        SUM(session_count) as sessionCount
-      FROM usage_stats
-      GROUP BY stat_date
-      ORDER BY stat_date DESC
-    `).all() as any[]
-    
-    // Get hourly stats from DB (last 24 hours)
-    const hourlyStats = db.prepare(`
-      SELECT stat_hour as hour,
-        SUM(input_tokens) as inputTokens,
-        SUM(output_tokens) as outputTokens,
-        SUM(cache_read) as cacheRead,
-        SUM(cache_write) as cacheWrite,
-        SUM(total_tokens) as totalTokens,
-        SUM(cost) as cost,
-        SUM(session_count) as sessionCount
-      FROM usage_stats
-      GROUP BY stat_hour
-      ORDER BY stat_hour DESC
-      LIMIT 24
-    `).all() as any[]
-    
-    // Get monthly stats from DB
-    const monthlyStats = db.prepare(`
-      SELECT substr(stat_date, 1, 7) as month,
-        SUM(input_tokens) as inputTokens,
-        SUM(output_tokens) as outputTokens,
-        SUM(cache_read) as cacheRead,
-        SUM(cache_write) as cacheWrite,
-        SUM(total_tokens) as totalTokens,
-        SUM(cost) as cost,
-        SUM(session_count) as sessionCount
-      FROM usage_stats
-      GROUP BY substr(stat_date, 1, 7)
-      ORDER BY month DESC
-    `).all() as any[]
-    
-    // Get agent stats from DB
-    const agentStatsRaw = db.prepare(`
-      SELECT agent_id as agentId, agent_name as agentName,
-        SUM(input_tokens) as inputTokens,
-        SUM(output_tokens) as outputTokens,
-        SUM(cache_read) as cacheRead,
-        SUM(cache_write) as cacheWrite,
-        SUM(total_tokens) as totalTokens,
-        SUM(cost) as cost,
-        SUM(session_count) as sessionCount
-      FROM usage_stats
-      GROUP BY agent_id
-    `).all() as any[]
-    
-    // Get model stats from DB
-    const modelStatsRaw = db.prepare(`
-      SELECT model, provider,
-        SUM(input_tokens) as inputTokens,
-        SUM(output_tokens) as outputTokens,
-        SUM(cache_read) as cacheRead,
-        SUM(cache_write) as cacheWrite,
-        SUM(total_tokens) as totalTokens,
-        SUM(cost) as cost,
-        SUM(session_count) as sessionCount
-      FROM usage_stats
-      GROUP BY model, provider
-    `).all() as any[]
-    
-    // Get total sessions count
-    const totalSessionsResult = db.prepare(`
-      SELECT SUM(session_count) as total FROM usage_stats
-    `).get() as any
-    const totalSessions = totalSessionsResult?.total || 0
-    
-    // Build totals
-    const totalResult = db.prepare(`
-      SELECT 
-        SUM(input_tokens) as inputTokens,
-        SUM(output_tokens) as outputTokens,
-        SUM(cache_read) as cacheRead,
-        SUM(cache_write) as cacheWrite,
-        SUM(total_tokens) as totalTokens,
-        SUM(cost) as cost
-      FROM usage_stats
-    `).get() as any
-    
-    const total = {
-      inputTokens: totalResult?.inputTokens || 0,
-      outputTokens: totalResult?.outputTokens || 0,
-      cacheRead: totalResult?.cacheRead || 0,
-      cacheWrite: totalResult?.cacheWrite || 0,
-      totalTokens: totalResult?.totalTokens || 0,
-      cost: totalResult?.cost || 0
-    }
-    
-    // Build agent map with models
-    const agentMap: Record<string, any> = {}
-    for (const stats of agentStatsRaw) {
-      agentMap[stats.agentId] = {
-        ...stats,
-        models: {}
-      }
-    }
-    
-    // Get agent model breakdown from DB
-    const agentModelStats = db.prepare(`
-      SELECT agent_id, model, provider,
-        SUM(input_tokens) as inputTokens,
-        SUM(output_tokens) as outputTokens,
-        SUM(cache_read) as cacheRead,
-        SUM(cache_write) as cacheWrite,
-        SUM(total_tokens) as totalTokens,
-        SUM(cost) as cost,
-        SUM(session_count) as sessionCount
-      FROM usage_stats
-      GROUP BY agent_id, model, provider
-    `).all() as any[]
-    
-    for (const stats of agentModelStats) {
-      if (agentMap[stats.agent_id]) {
-        const key = `${stats.provider}:${stats.model}`
-        agentMap[stats.agent_id].models[key] = {
-          model: stats.model,
-          provider: stats.provider,
-          inputTokens: stats.inputTokens,
-          outputTokens: stats.outputTokens,
-          cacheRead: stats.cacheRead,
-          cacheWrite: stats.cacheWrite,
-          totalTokens: stats.totalTokens,
-          cost: stats.cost,
-          sessionCount: stats.sessionCount
-        }
-      }
-    }
-    
-    // Build model map
-    const modelMap: Record<string, any> = {}
-    
-    // Add configured models with 0 values
-    for (const cm of configuredModels) {
-      const key = `${cm.provider}:${cm.id}`
-      modelMap[key] = {
-        model: cm.id,
-        provider: cm.provider,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: 0,
-        sessionCount: 0
-      }
-    }
-    
-    // Override with actual values
-    for (const stats of modelStatsRaw) {
-      const key = `${stats.provider}:${stats.model}`
-      modelMap[key] = {
-        model: stats.model,
-        provider: stats.provider,
-        inputTokens: stats.inputTokens,
-        outputTokens: stats.outputTokens,
-        cacheRead: stats.cacheRead,
-        cacheWrite: stats.cacheWrite,
-        totalTokens: stats.totalTokens,
-        cost: stats.cost,
-        sessionCount: stats.sessionCount
-      }
-    }
-    
-    // Sort agents by total tokens
-    const agents = Object.values(agentMap)
-      .sort((a, b) => b.totalTokens - a.totalTokens)
-      .map((a: any) => ({
-        ...a,
-        models: Object.values(a.models).sort((m1: any, m2: any) => m2.totalTokens - m1.totalTokens)
-      }))
-    
-    // Sort models by total tokens
-    const models = Object.values(modelMap).sort((a: any, b: any) => b.totalTokens - a.totalTokens)
-    
-    return {
-      total,
-      totalSessions,
-      agents,
-      models,
-      daily: dailyStats,
-      hourly: hourlyStats,
-      monthly: monthlyStats,
-      fromCache: true
-    }
-  } catch (error) {
-    console.error('Failed to read from DB:', error)
-    return null
-  }
-}
-
 function getAgentIds(): string[] {
   try {
     return readdirSync(AGENTS_DIR).filter(name => {
@@ -245,439 +33,6 @@ function getAgentIds(): string[] {
   } catch {
     return []
   }
-}
-
-// In-memory cache for usage data
-let usageCache: { data: any; timestamp: number } | null = null
-const CACHE_TTL_MS = 30 * 1000 // 30 seconds cache
-
-// GET /api/usage
-export async function GET(request: NextRequest) {
-  // Auth check
-  const authResult = await verifyAuth(request)
-  if (!authResult.authorized) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' }
-    })
-  }
-
-  const searchParams = new URL(request.url).searchParams
-  const forceRefresh = searchParams.get('refresh') === 'true'
-  
-  // Try reading from DB cache first (fast path, ~0ms)
-  if (!forceRefresh && usageCache && (Date.now() - usageCache.timestamp) < CACHE_TTL_MS) {
-    return NextResponse.json(usageCache.data)
-  }
-  
-  // Try reading from database (medium path, ~10-50ms)
-  if (!forceRefresh) {
-    const dbData = readUsageFromDB()
-    if (dbData) {
-      // Update cache
-      usageCache = { data: dbData, timestamp: Date.now() }
-      return NextResponse.json(dbData)
-    }
-  }
-  
-  // Fall back to reading files (slow path, ~1000ms+)
-  // This also updates the DB cache for next time
-  
-  const agentNames = getAgentNames()
-  const agentIds = getAgentIds()
-  
-  const agentUsageMap: Record<string, any> = {}
-  const modelUsageMap: Record<string, any> = {}
-  const dailyUsageMap: Record<string, any> = {}
-  const hourlyUsageMap: Record<string, any> = {}
-  const monthlyUsageMap: Record<string, any> = {}
-  
-  let totalUsage: any = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: 0
-  }
-  
-  let totalSessions = 0
-  
-  // Process each agent's sessions
-  for (const agentId of agentIds) {
-    const sessionsPath = join(AGENTS_DIR, agentId, 'sessions')
-    
-    // Initialize agent usage
-    agentUsageMap[agentId] = {
-      agentId,
-      agentName: agentNames[agentId] || agentId,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: 0,
-      sessionCount: 0,
-      models: {}
-    }
-    
-    try {
-      const files = readdirSync(sessionsPath)
-      const jsonlFiles = files.filter(f => f.endsWith('.jsonl') && !f.includes('.checkpoint.'))
-      
-      for (const file of jsonlFiles) {
-        const filePath = join(sessionsPath, file)
-        
-        try {
-          const content = readFileSync(filePath, 'utf-8')
-          const lines = content.split('\n').filter(l => l.trim())
-          
-          let lastModel = 'unknown'
-          let lastProvider = 'unknown'
-          let sessionHasUsage = false
-          
-          for (const line of lines) {
-            try {
-              const event = JSON.parse(line)
-              
-              if (event.type === 'model_change') {
-                lastModel = event.modelId || 'unknown'
-                lastProvider = event.provider || getProvider('unknown', lastModel)
-              }
-              
-              if (event.type === 'message' && event.message?.usage) {
-                const usage = event.message.usage
-                const inputTokens = usage.input || 0
-                const outputTokens = usage.output || 0
-                const cacheRead = usage.cacheRead || 0
-                const cacheWrite = usage.cacheWrite || 0
-                const totalTokens = usage.totalTokens || 0
-                const cost = usage.cost?.total || 0
-                
-                if (totalTokens > 0) {
-                  sessionHasUsage = true
-                  
-                  const timestamp = event.timestamp || event.message.timestamp
-                  const hour = toBeijingHour(timestamp ? new Date(timestamp) : new Date())
-                  const date = hour.slice(0, 10)
-                  const month = date.slice(0, 7)
-                  
-                  let model = lastModel
-                  let provider = lastProvider
-                  if (event.message.model) model = event.message.model
-                  if (event.message.provider) {
-                    provider = event.message.provider
-                  } else {
-                    provider = getProvider(event.message.api || 'unknown', model)
-                  }
-                  
-                  // Update agent
-                  const agentUsage = agentUsageMap[agentId]
-                  agentUsage.inputTokens += inputTokens
-                  agentUsage.outputTokens += outputTokens
-                  agentUsage.cacheRead += cacheRead
-                  agentUsage.cacheWrite += cacheWrite
-                  agentUsage.totalTokens += totalTokens
-                  agentUsage.cost += cost
-                  
-                  // Update model key
-                  const modelKey = `${provider}:${model}`
-                  if (!agentUsage.models[modelKey]) {
-                    agentUsage.models[modelKey] = {
-                      model,
-                      provider,
-                      inputTokens: 0,
-                      outputTokens: 0,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                      totalTokens: 0,
-                      cost: 0,
-                      sessionCount: 0
-                    }
-                  }
-                  const modelUsage = agentUsage.models[modelKey]
-                  modelUsage.inputTokens += inputTokens
-                  modelUsage.outputTokens += outputTokens
-                  modelUsage.cacheRead += cacheRead
-                  modelUsage.cacheWrite += cacheWrite
-                  modelUsage.totalTokens += totalTokens
-                  modelUsage.cost += cost
-                  
-                  // Update global model
-                  if (!modelUsageMap[modelKey]) {
-                    modelUsageMap[modelKey] = {
-                      model,
-                      provider,
-                      inputTokens: 0,
-                      outputTokens: 0,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                      totalTokens: 0,
-                      cost: 0,
-                      sessionCount: 0
-                    }
-                  }
-                  const globalModel = modelUsageMap[modelKey]
-                  globalModel.inputTokens += inputTokens
-                  globalModel.outputTokens += outputTokens
-                  globalModel.cacheRead += cacheRead
-                  globalModel.cacheWrite += cacheWrite
-                  globalModel.totalTokens += totalTokens
-                  globalModel.cost += cost
-                  
-                  // Update daily
-                  if (!dailyUsageMap[date]) {
-                    dailyUsageMap[date] = {
-                      date,
-                      inputTokens: 0,
-                      outputTokens: 0,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                      totalTokens: 0,
-                      cost: 0,
-                      sessionCount: 0
-                    }
-                  }
-                  const dailyUsage = dailyUsageMap[date]
-                  dailyUsage.inputTokens += inputTokens
-                  dailyUsage.outputTokens += outputTokens
-                  dailyUsage.cacheRead += cacheRead
-                  dailyUsage.cacheWrite += cacheWrite
-                  dailyUsage.totalTokens += totalTokens
-                  dailyUsage.cost += cost
-                  
-                  // Update hourly
-                  if (!hourlyUsageMap[hour]) {
-                    hourlyUsageMap[hour] = {
-                      hour,
-                      agentId,
-                      agentName: agentNames[agentId] || agentId,
-                      inputTokens: 0,
-                      outputTokens: 0,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                      totalTokens: 0,
-                      cost: 0,
-                      sessionCount: 0,
-                      models: {}
-                    }
-                  }
-                  const hourlyUsage = hourlyUsageMap[hour]
-                  hourlyUsage.inputTokens += inputTokens
-                  hourlyUsage.outputTokens += outputTokens
-                  hourlyUsage.cacheRead += cacheRead
-                  hourlyUsage.cacheWrite += cacheWrite
-                  hourlyUsage.totalTokens += totalTokens
-                  hourlyUsage.cost += cost
-                  
-                  // Update hourly model breakdown
-                  const hourModelKey = provider + ':' + model
-                  if (!hourlyUsage.models[hourModelKey]) {
-                    hourlyUsage.models[hourModelKey] = { model, provider, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 }
-                  }
-                  const hm = hourlyUsage.models[hourModelKey]
-                  hm.inputTokens += inputTokens
-                  hm.outputTokens += outputTokens
-                  hm.cacheRead += cacheRead
-                  hm.cacheWrite += cacheWrite
-                  hm.totalTokens += totalTokens
-                  hm.cost += cost
-                  
-                  // Update monthly
-                  if (!monthlyUsageMap[month]) {
-                    monthlyUsageMap[month] = {
-                      month,
-                      inputTokens: 0,
-                      outputTokens: 0,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                      totalTokens: 0,
-                      cost: 0,
-                      sessionCount: 0
-                    }
-                  }
-                  const monthlyUsage = monthlyUsageMap[month]
-                  monthlyUsage.inputTokens += inputTokens
-                  monthlyUsage.outputTokens += outputTokens
-                  monthlyUsage.cacheRead += cacheRead
-                  monthlyUsage.cacheWrite += cacheWrite
-                  monthlyUsage.totalTokens += totalTokens
-                  monthlyUsage.cost += cost
-                  
-                  // Update totals
-                  totalUsage.inputTokens += inputTokens
-                  totalUsage.outputTokens += outputTokens
-                  totalUsage.cacheRead += cacheRead
-                  totalUsage.cacheWrite += cacheWrite
-                  totalUsage.totalTokens += totalTokens
-                  totalUsage.cost += cost
-                }
-              }
-            } catch {}
-          }
-          
-          if (sessionHasUsage) {
-            agentUsageMap[agentId].sessionCount++
-            totalSessions++
-          }
-        } catch {}
-      }
-    } catch {}
-  }
-  
-  // Get configured models for padding
-  const configuredModels = getAllConfiguredModels()
-  
-  // Sort agents by total tokens
-  const agents = Object.values(agentUsageMap)
-    .sort((a: any, b: any) => b.totalTokens - a.totalTokens)
-    .map((a: any) => ({
-      ...a,
-      models: Object.values(a.models).sort((m1: any, m2: any) => m2.totalTokens - m1.totalTokens)
-    }))
-  
-  // Build model list with padding for unused models
-  const modelMap: Record<string, any> = {}
-  for (const cm of configuredModels) {
-    const key = `${cm.provider}:${cm.id}`
-    modelMap[key] = {
-      model: cm.id,
-      provider: cm.provider,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: 0,
-      sessionCount: 0
-    }
-  }
-  for (const [key, model] of Object.entries(modelUsageMap)) {
-    modelMap[key] = model
-  }
-  const models = Object.values(modelMap).sort((a: any, b: any) => b.totalTokens - a.totalTokens)
-  
-  // Daily: pad to 10 days
-  const today = new Date()
-  const tenDays: string[] = []
-  for (let i = 9; i >= 0; i--) {
-    const d = new Date(today)
-    d.setDate(d.getDate() - i)
-    tenDays.push(d.toISOString().slice(0, 10))
-  }
-  const daily = tenDays.map(date => {
-    const existing = dailyUsageMap[date]
-    if (existing) return existing
-    return {
-      date,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: 0,
-      sessionCount: 0
-    }
-  })
-  
-  // Sort hourly by hour descending, take last 24 hours
-  const hourly = Object.values(hourlyUsageMap)
-    .sort((a: any, b: any) => b.hour.localeCompare(a.hour))
-    .slice(0, 24)
-  
-  // Sort monthly by month descending
-  const monthly = Object.values(monthlyUsageMap)
-    .sort((a: any, b: any) => b.month.localeCompare(a.month))
-
-  const result = {
-    total: totalUsage,
-    totalSessions,
-    agents,
-    models,
-    daily,
-    hourly,
-    monthly
-  }
-  
-  // Get existing records to preserve old data
-  const existingRecords = new Set<string>()
-  try {
-    const existing = db.prepare('SELECT stat_hour, agent_id, model, provider FROM usage_stats').all() as any[]
-    for (const r of existing) {
-      existingRecords.add(`${r.stat_hour}:${r.agent_id}:${r.model}:${r.provider}`)
-    }
-  } catch {}
-
-  // Save to database cache for other fast-read scenarios
-  try {
-    const insert = db.prepare(`
-      INSERT INTO usage_stats (stat_date, stat_hour, agent_id, agent_name, model, provider, 
-        input_tokens, output_tokens, cache_read, cache_write, total_tokens, cost, session_count, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `)
-
-    const agentNames = getAgentNames()
-
-    // Save all NEW hourly stats to DB (skip existing)
-    const insertMany = db.transaction((items: any[]) => {
-      for (const item of items) {
-        if (item.hour) {
-          insert.run(
-            item.hour.slice(0, 10),
-            item.hour,
-            item.agentId || 'unknown',
-            agentNames[item.agentId] || item.agentId || 'unknown',
-            item.model || 'unknown',
-            item.provider || 'unknown',
-            item.inputTokens,
-            item.outputTokens,
-            item.cacheRead,
-            item.cacheWrite,
-            item.totalTokens,
-            item.cost,
-            item.sessionCount || 0
-          )
-        }
-      }
-    })
-
-    const allItems: any[] = []
-    for (const hour of Object.keys(hourlyUsageMap)) {
-      const data = hourlyUsageMap[hour]
-      for (const modelKey of Object.keys(data.models)) {
-        const m = data.models[modelKey]
-        const key = `${data.hour}:${data.agentId}:${m.model}:${m.provider}`
-        // Only add if not exists
-        if (!existingRecords.has(key)) {
-          allItems.push({
-            hour: data.hour,
-            agentId: data.agentId,
-            agentName: data.agentName,
-            model: m.model,
-            provider: m.provider,
-            inputTokens: m.inputTokens,
-            outputTokens: m.outputTokens,
-            cacheRead: m.cacheRead,
-            cacheWrite: m.cacheWrite,
-            totalTokens: m.totalTokens,
-            cost: m.cost,
-            sessionCount: m.sessionCount
-          })
-        }
-      }
-    }
-
-    if (allItems.length > 0) {
-      insertMany(allItems)
-    }
-  } catch (e) {
-    console.error('Failed to save usage to cache:', e)
-  }
-  
-  // Update cache before returning
-  usageCache = { data: result, timestamp: Date.now() }
-  
-  return NextResponse.json(result)
 }
 
 function getProvider(api: string, modelId: string): string {
@@ -707,4 +62,375 @@ function toBeijingHour(date: Date): string {
   const parts = formatter.formatToParts(date)
   const get = (type: string) => parts.find(p => p.type === type)?.value || ''
   return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:00`
+}
+
+function parseUsage(message: any): { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number } | null {
+  if (!message?.usage) return null
+  const usage = message.usage
+  return {
+    inputTokens: usage.input || 0,
+    outputTokens: usage.output || 0,
+    cacheRead: usage.cacheRead || 0,
+    cacheWrite: usage.cacheWrite || 0,
+    totalTokens: usage.totalTokens || 0,
+    cost: usage.cost?.total || 0
+  }
+}
+
+// ============ GET /api/usage ============
+// 只从 SQLite 读取，不做任何同步
+export async function GET(request: NextRequest): Promise<Response> {
+  const authResult = await verifyAuth(request)
+  if (!authResult.authorized) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' }
+    })
+  }
+
+  try {
+    const configuredModels = getAllConfiguredModels()
+
+    // Daily stats (last 10 days)
+    const dailyStats = db.prepare(`
+      SELECT stat_date as date,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY stat_date
+      ORDER BY stat_date DESC
+      LIMIT 10
+    `).all() as any[]
+
+    // Hourly stats (last 24 hours)
+    const hourlyStats = db.prepare(`
+      SELECT stat_hour as hour,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY stat_hour
+      ORDER BY stat_hour DESC
+      LIMIT 24
+    `).all() as any[]
+
+    // Monthly stats
+    const monthlyStats = db.prepare(`
+      SELECT substr(stat_date, 1, 7) as month,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY substr(stat_date, 1, 7)
+      ORDER BY month DESC
+    `).all() as any[]
+
+    // Agent stats
+    const agentStatsRaw = db.prepare(`
+      SELECT agent_id as agentId, agent_name as agentName,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY agent_id
+    `).all() as any[]
+
+    // Model stats
+    const modelStatsRaw = db.prepare(`
+      SELECT model, provider,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY model, provider
+    `).all() as any[]
+
+    // Totals
+    const totalResult = db.prepare(`
+      SELECT 
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost
+      FROM usage_stats
+    `).get() as any
+
+    const totalSessionsResult = db.prepare(`
+      SELECT SUM(session_count) as total FROM usage_stats
+    `).get() as any
+
+    const total = {
+      inputTokens: totalResult?.inputTokens || 0,
+      outputTokens: totalResult?.outputTokens || 0,
+      cacheRead: totalResult?.cacheRead || 0,
+      cacheWrite: totalResult?.cacheWrite || 0,
+      totalTokens: totalResult?.totalTokens || 0,
+      cost: totalResult?.cost || 0
+    }
+
+    const totalSessions = totalSessionsResult?.total || 0
+
+    // Build agent map
+    const agentMap: Record<string, any> = {}
+    for (const stats of agentStatsRaw) {
+      agentMap[stats.agentId] = { ...stats, models: {} }
+    }
+
+    // Agent model breakdown
+    const agentModelStats = db.prepare(`
+      SELECT agent_id, model, provider,
+        SUM(input_tokens) as inputTokens,
+        SUM(output_tokens) as outputTokens,
+        SUM(cache_read) as cacheRead,
+        SUM(cache_write) as cacheWrite,
+        SUM(total_tokens) as totalTokens,
+        SUM(cost) as cost,
+        SUM(session_count) as sessionCount
+      FROM usage_stats
+      GROUP BY agent_id, model, provider
+    `).all() as any[]
+
+    for (const stats of agentModelStats) {
+      if (agentMap[stats.agent_id]) {
+        const key = `${stats.provider}:${stats.model}`
+        agentMap[stats.agent_id].models[key] = {
+          model: stats.model,
+          provider: stats.provider,
+          inputTokens: stats.inputTokens,
+          outputTokens: stats.outputTokens,
+          cacheRead: stats.cacheRead,
+          cacheWrite: stats.cacheWrite,
+          totalTokens: stats.totalTokens,
+          cost: stats.cost,
+          sessionCount: stats.sessionCount
+        }
+      }
+    }
+
+    // Build model map (pad with configured models)
+    const modelMap: Record<string, any> = {}
+    for (const cm of configuredModels) {
+      const key = `${cm.provider}:${cm.id}`
+      modelMap[key] = { model: cm.id, provider: cm.provider, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0, sessionCount: 0 }
+    }
+    for (const stats of modelStatsRaw) {
+      const key = `${stats.provider}:${stats.model}`
+      modelMap[key] = { model: stats.model, provider: stats.provider, inputTokens: stats.inputTokens, outputTokens: stats.outputTokens, cacheRead: stats.cacheRead, cacheWrite: stats.cacheWrite, totalTokens: stats.totalTokens, cost: stats.cost, sessionCount: stats.sessionCount }
+    }
+
+    const agents = Object.values(agentMap)
+      .sort((a: any, b: any) => b.totalTokens - a.totalTokens)
+      .map((a: any) => ({
+        ...a,
+        models: Object.values(a.models).sort((m1: any, m2: any) => m2.totalTokens - m1.totalTokens)
+      }))
+
+    const models = Object.values(modelMap).sort((a: any, b: any) => b.totalTokens - a.totalTokens)
+
+    // Pad daily to 10 days
+    const today = new Date()
+    const tenDays: string[] = []
+    for (let i = 9; i >= 0; i--) {
+      const d = new Date(today)
+      d.setDate(d.getDate() - i)
+      tenDays.push(d.toISOString().slice(0, 10))
+    }
+    const daily = tenDays.map(date => {
+      const existing = dailyStats.find(d => d.date === date)
+      return existing || { date, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0, sessionCount: 0 }
+    })
+
+    return NextResponse.json({
+      total,
+      totalSessions,
+      agents,
+      models,
+      daily,
+      hourly: hourlyStats,
+      monthly: monthlyStats
+    })
+  } catch (error) {
+    console.error('Failed to read usage from DB:', error)
+    return NextResponse.json({ error: 'Failed to read usage data' }, { status: 500 })
+  }
+}
+
+// ============ POST /api/usage-sync ============
+// 从会话文件读取，同步到 SQLite
+export async function POST(request: NextRequest) {
+  const authResult = await verifyAuth(request)
+  if (!authResult.authorized) {
+    return createAuthResponse(false, '请先登录') as Response
+  }
+
+  try {
+    const agentNames = getAgentNames()
+    const agentIds = getAgentIds()
+
+    // 聚合统计数据
+    const statsMap: Record<string, any> = {}
+
+    for (const agentId of agentIds) {
+      const sessionsPath = join(AGENTS_DIR, agentId, 'sessions')
+      try {
+        const files = readdirSync(sessionsPath).filter(f => f.endsWith('.jsonl') && !f.includes('.checkpoint.') && !f.includes('.trajectory.'))
+
+        for (const file of files) {
+          const filePath = join(sessionsPath, file)
+          try {
+            const content = readFileSync(filePath, 'utf-8')
+            const lines = content.split('\n').filter(l => l.trim())
+
+            let lastModel = 'unknown'
+            let lastProvider = 'unknown'
+            let sessionHasUsage = false
+            let sessionFirstTimestamp: number | null = null
+
+            // First pass: collect all usage
+            for (const line of lines) {
+              try {
+                const event = JSON.parse(line)
+
+                if (event.type === 'model_change') {
+                  lastModel = event.modelId || 'unknown'
+                  lastProvider = event.provider || getProvider('unknown', lastModel)
+                }
+
+                if (event.type === 'message' && event.message?.usage) {
+                  const usage = parseUsage(event.message)
+                  if (usage && usage.totalTokens > 0) {
+                    sessionHasUsage = true
+                    if (!sessionFirstTimestamp) {
+                      sessionFirstTimestamp = event.timestamp || event.message?.timestamp || Date.now()
+                    }
+
+                    const timestamp = event.timestamp || event.message.timestamp
+                    const hour = toBeijingHour(timestamp ? new Date(timestamp) : new Date())
+                    const date = hour.slice(0, 10)
+
+                    let model = event.message.model || lastModel
+                    let provider = event.message.provider || getProvider(event.message.api || 'unknown', model)
+
+                    const key = `${date}|${hour}|${agentId}|${model}|${provider}`
+                    if (!statsMap[key]) {
+                      statsMap[key] = {
+                        stat_date: date,
+                        stat_hour: hour,
+                        agent_id: agentId,
+                        agent_name: agentNames[agentId] || agentId,
+                        model,
+                        provider,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_read: 0,
+                        cache_write: 0,
+                        total_tokens: 0,
+                        cost: 0,
+                        session_count: 0
+                      }
+                    }
+
+                    const stats = statsMap[key]
+                    stats.input_tokens += usage.inputTokens
+                    stats.output_tokens += usage.outputTokens
+                    stats.cache_read += usage.cacheRead
+                    stats.cache_write += usage.cacheWrite
+                    stats.total_tokens += usage.totalTokens
+                    stats.cost += usage.cost
+                  }
+                }
+              } catch {}
+            }
+
+            // Count session once
+            if (sessionHasUsage && sessionFirstTimestamp) {
+              const hour = toBeijingHour(new Date(sessionFirstTimestamp))
+              const date = hour.slice(0, 10)
+              // Find the model for first usage
+              let foundModel = lastModel
+              let foundProvider = lastProvider
+              for (const line of lines) {
+                try {
+                  const event = JSON.parse(line)
+                  if (event.type === 'message' && event.message?.usage) {
+                    if (event.message.model) foundModel = event.message.model
+                    if (event.message.provider) foundProvider = event.message.provider
+                    else foundProvider = getProvider(event.message.api || 'unknown', foundModel)
+                    break
+                  }
+                } catch {}
+              }
+              const key = `${date}|${hour}|${agentId}|${foundModel}|${foundProvider}`
+              if (statsMap[key]) {
+                statsMap[key].session_count++
+              }
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    // Upsert all stats to DB using ON CONFLICT UPDATE
+    const upsert = db.prepare(`
+      INSERT INTO usage_stats (stat_date, stat_hour, agent_id, agent_name, model, provider,
+        input_tokens, output_tokens, cache_read, cache_write, total_tokens, cost, session_count, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(stat_date, stat_hour, agent_id, model, provider) 
+      DO UPDATE SET
+        agent_name = excluded.agent_name,
+        input_tokens = excluded.input_tokens,
+        output_tokens = excluded.output_tokens,
+        cache_read = excluded.cache_read,
+        cache_write = excluded.cache_write,
+        total_tokens = excluded.total_tokens,
+        cost = excluded.cost,
+        session_count = excluded.session_count,
+        updated_at = CURRENT_TIMESTAMP
+    `)
+
+    const insertMany = db.transaction((items: any[]) => {
+      for (const s of items) {
+        upsert.run(
+          s.stat_date, s.stat_hour, s.agent_id, s.agent_name, s.model, s.provider,
+          s.input_tokens, s.output_tokens, s.cache_read, s.cache_write,
+          s.total_tokens, s.cost, s.session_count
+        )
+      }
+    })
+
+    const items = Object.values(statsMap) as any[]
+    insertMany(items)
+
+    return NextResponse.json({
+      success: true,
+      synced_count: items.length,
+      agents_count: agentIds.length
+    })
+  } catch (error) {
+    console.error('Usage sync failed:', error)
+    return NextResponse.json({ error: 'Sync failed', details: String(error) }, { status: 500 })
+  }
 }

@@ -103,7 +103,7 @@ export async function POST(request: Request) {
       
       try {
         const files = readdirSync(sessionsPath)
-        const jsonlFiles = files.filter(f => f.includes('.jsonl'))
+        const jsonlFiles = files.filter(f => f.endsWith('.jsonl') && !f.includes('.checkpoint.') && !f.includes('.trajectory.'))
         
         for (const file of jsonlFiles) {
           const filePath = join(sessionsPath, file)
